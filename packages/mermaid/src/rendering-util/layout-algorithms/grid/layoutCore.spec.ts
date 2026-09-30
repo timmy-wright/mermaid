@@ -59,6 +59,26 @@ function geometrySnapshot(nodes: Node[]) {
 }
 
 describe('grid layout core', () => {
+  it('handles an empty graph', () => {
+    const data = layout([]);
+
+    const result = runGridLayoutCore(data);
+
+    expect(data.nodes).toEqual([]);
+    expect(data.edges).toEqual([]);
+    expect(result.forest.rootChildren).toEqual([]);
+    expect(result.itemMeta.size).toBe(0);
+  });
+
+  it('assigns finite geometry to a single automatically placed node', () => {
+    const data = layout([leaf('only', 40, 20)]);
+
+    const result = runGridLayoutCore(data);
+
+    expect(data.nodes[0]).toMatchObject({ x: 20, y: 10, width: 40, height: 20 });
+    expect(result.itemMeta.get('only')).toMatchObject({ row: 1, column: 1 });
+  });
+
   it('marks routed edges with their rendering capabilities', () => {
     const data = layout(
       [

@@ -36,6 +36,24 @@ const nodeCenter = async (page: Parameters<typeof diagramSvg>[0], label: string)
 };
 
 test.describe('grid layout rendering', () => {
+  test('renders the error diagram for an invalid grid placement', async ({ page }, testInfo) => {
+    await renderGraph(
+      page,
+      testInfo,
+      `---
+config:
+  layout: grid
+---
+flowchart TB
+  A["Invalid placement"]@{ row: 0, column: 1 }`,
+      { rejectErrorDiagram: false, screenshot: false }
+    );
+
+    const svg = page.locator('svg').first();
+    await expect(svg.locator('.error-icon').first()).toBeVisible();
+    await expect(svg.locator('.error-text').first()).toHaveText('Syntax error in text');
+  });
+
   test('flowchart grid keeps accessibility text, links, callbacks, and inline placement ordering', async ({
     page,
   }, testInfo) => {

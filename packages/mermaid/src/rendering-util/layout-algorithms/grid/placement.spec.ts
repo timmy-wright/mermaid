@@ -100,8 +100,19 @@ describe('grid placement', () => {
     });
   });
 
-  it('throws for invalid coordinates and conflicting stack alignment', () => {
-    const items = [node('bad', { row: 0 })];
+  it.each([
+    { field: 'row', value: 0 },
+    { field: 'row', value: -1 },
+    { field: 'row', value: 1.5 },
+    { field: 'row', value: Number.NaN },
+    { field: 'row', value: '2' },
+    { field: 'column', value: 0 },
+    { field: 'column', value: -1 },
+    { field: 'column', value: 1.5 },
+    { field: 'column', value: Number.NaN },
+    { field: 'column', value: '2' },
+  ] as const)('throws for invalid $field coordinate $value', ({ field, value }) => {
+    const items = [node('bad', { [field]: value })];
     const sourceOrder = new Map([['bad', 0]]);
     const gridConfig = readGridConfig({
       nodes: [],
@@ -111,7 +122,14 @@ describe('grid placement', () => {
     expect(() => resolveGridPlacements(items, sourceOrder, gridConfig)).toThrow(
       /GRID_INVALID_COORDINATE/
     );
+  });
 
+  it('throws for conflicting stack alignment', () => {
+    const gridConfig = readGridConfig({
+      nodes: [],
+      edges: [],
+      config: config(),
+    } as LayoutData);
     const conflictItems = [
       node('one', { row: 1, column: 1, verticalAlign: 'top' }),
       node('two', { row: 1, column: 1, verticalAlign: 'bottom' }),
