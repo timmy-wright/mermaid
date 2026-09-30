@@ -15,6 +15,7 @@ const DICTIONARY_CONFIG_PATTERNS: Record<string, RegExp> = {
 };
 
 const GRID_PLACEMENT_KEYS = new Set(['row', 'column', 'horizontalAlign', 'verticalAlign']);
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 const sanitizeDictionaryConfig = (dict: Record<string, unknown>, valuePattern: RegExp): void => {
   for (const key of Object.keys(dict)) {
@@ -36,9 +37,7 @@ const sanitizeGridPlacements = (dict: Record<string, unknown>): void => {
   for (const key of Object.keys(dict)) {
     const value = dict[key];
     if (
-      key.startsWith('__') ||
-      key.includes('proto') ||
-      key.includes('constr') ||
+      UNSAFE_OBJECT_KEYS.has(key) ||
       typeof value !== 'object' ||
       value === null ||
       Array.isArray(value)
@@ -49,13 +48,7 @@ const sanitizeGridPlacements = (dict: Record<string, unknown>): void => {
     }
     const placement = value as Record<string, unknown>;
     for (const placementKey of Object.keys(placement)) {
-      if (
-        placementKey.startsWith('__') ||
-        placementKey.includes('proto') ||
-        placementKey.includes('constr') ||
-        !GRID_PLACEMENT_KEYS.has(placementKey) ||
-        placement[placementKey] == null
-      ) {
+      if (!GRID_PLACEMENT_KEYS.has(placementKey) || placement[placementKey] == null) {
         log.debug('sanitize deleting grid placement property:', placementKey);
         delete placement[placementKey];
       }

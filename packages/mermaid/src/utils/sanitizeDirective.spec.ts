@@ -60,6 +60,11 @@ describe('sanitizeDirective', () => {
         grid: {
           placements: {
             G: { row: 1, column: 2 },
+            protocolGateway: { row: 2 },
+            prototypeA: { column: 3 },
+            constraintSolver: { horizontalAlign: 'center' },
+            constructorNode: { verticalAlign: 'top' },
+            __proto__hack: { row: 4 },
             'group.with-punctuation': {
               horizontalAlign: 'left',
               verticalAlign: 'bottom',
@@ -70,6 +75,11 @@ describe('sanitizeDirective', () => {
       sanitizeDirective(args);
       expect(args.grid.placements).toEqual({
         G: { row: 1, column: 2 },
+        protocolGateway: { row: 2 },
+        prototypeA: { column: 3 },
+        constraintSolver: { horizontalAlign: 'center' },
+        constructorNode: { verticalAlign: 'top' },
+        __proto__hack: { row: 4 },
         'group.with-punctuation': {
           horizontalAlign: 'left',
           verticalAlign: 'bottom',
@@ -77,13 +87,14 @@ describe('sanitizeDirective', () => {
       });
     });
 
-    it('drops invalid grid placement ids, non-object values, and unknown properties', () => {
+    it('drops unsafe grid placement ids, non-object values, and unknown properties', () => {
       const args = {
         grid: {
           placements: {
             valid: { row: 1, notAConfigKey: 'x' },
-            __proto__hack: { column: 1 },
-            constructorNode: { column: 2 },
+            ['__proto__']: { column: 1 },
+            constructor: { column: 2 },
+            prototype: { column: 3 },
             scalar: 3,
           },
         },
