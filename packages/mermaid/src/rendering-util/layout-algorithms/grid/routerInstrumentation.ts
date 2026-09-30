@@ -74,6 +74,105 @@ export interface GridRoutingInstrumentation {
   routes: GridRouteInstrumentation[];
 }
 
+export const gridRoutingMetricDisposition = {
+  containersBuilt: 'cumulative',
+  baseTopologyBuilds: 'cumulative',
+  baseVertices: 'cumulative',
+  baseAdjacencyEntries: 'cumulative',
+  buildSweepEvents: 'cumulative',
+  endpointOverlayBuilds: 'cumulative',
+  endpointOverlayVertices: 'cumulative',
+  hierarchyPortalPairs: 'transactional',
+  hierarchyPortalTransitionLength: 'transactional',
+  hierarchyPortalAlternativeAttempts: 'cumulative',
+  hierarchyPortalAlternativeSelections: 'transactional',
+  hierarchyBoundaryTransitions: 'transactional',
+  labelOverlayBuilds: 'cumulative',
+  labelOverlayVertices: 'cumulative',
+  searches: 'cumulative',
+  expandedStates: 'cumulative',
+  maxOpenSet: 'cumulative',
+  routesFound: 'transactional',
+  routesImpossible: 'transactional',
+  resourceLimitFallbacks: 'cumulative',
+  fallbackReasons: 'cumulative',
+  fallbackValidationFailures: 'cumulative',
+  compatibilitySegments: 'transactional',
+  compatibilityFastPathAttempts: 'cumulative',
+  compatibilityFastPaths: 'transactional',
+  compatibilityFastPathValidationFailures: 'cumulative',
+  compatibilityFastPathNonMinimalRoutes: 'cumulative',
+  compatibilityRecoveries: 'transactional',
+  compatibilityValidationFailures: 'cumulative',
+  bundleRetryAttempts: 'cumulative',
+  bundleRetrySuccesses: 'cumulative',
+  bundleSeparationRelaxations: 'transactional',
+  routeLength: 'transactional',
+  bendCount: 'transactional',
+  crossingCount: 'transactional',
+  sharedLength: 'transactional',
+  estimatedBytes: 'cumulative',
+  searchWorkspaceBytes: 'cumulative',
+  routeOrder: 'transactional',
+  routes: 'transactional',
+} as const satisfies Record<keyof GridRoutingInstrumentation, 'transactional' | 'cumulative'>;
+
+export interface GridRoutingInstrumentationCheckpoint {
+  routeOrderLength: number;
+  routesLength: number;
+  values: Pick<
+    GridRoutingInstrumentation,
+    | 'hierarchyPortalPairs'
+    | 'hierarchyPortalTransitionLength'
+    | 'hierarchyPortalAlternativeSelections'
+    | 'hierarchyBoundaryTransitions'
+    | 'routesFound'
+    | 'routesImpossible'
+    | 'compatibilitySegments'
+    | 'compatibilityFastPaths'
+    | 'compatibilityRecoveries'
+    | 'bundleSeparationRelaxations'
+    | 'routeLength'
+    | 'bendCount'
+    | 'crossingCount'
+    | 'sharedLength'
+  >;
+}
+
+export function createGridRoutingInstrumentationCheckpoint(
+  metrics: GridRoutingInstrumentation
+): GridRoutingInstrumentationCheckpoint {
+  return {
+    routeOrderLength: metrics.routeOrder.length,
+    routesLength: metrics.routes.length,
+    values: {
+      hierarchyPortalPairs: metrics.hierarchyPortalPairs,
+      hierarchyPortalTransitionLength: metrics.hierarchyPortalTransitionLength,
+      hierarchyPortalAlternativeSelections: metrics.hierarchyPortalAlternativeSelections,
+      hierarchyBoundaryTransitions: metrics.hierarchyBoundaryTransitions,
+      routesFound: metrics.routesFound,
+      routesImpossible: metrics.routesImpossible,
+      compatibilitySegments: metrics.compatibilitySegments,
+      compatibilityFastPaths: metrics.compatibilityFastPaths,
+      compatibilityRecoveries: metrics.compatibilityRecoveries,
+      bundleSeparationRelaxations: metrics.bundleSeparationRelaxations,
+      routeLength: metrics.routeLength,
+      bendCount: metrics.bendCount,
+      crossingCount: metrics.crossingCount,
+      sharedLength: metrics.sharedLength,
+    },
+  };
+}
+
+export function restoreGridRoutingInstrumentationCheckpoint(
+  metrics: GridRoutingInstrumentation,
+  checkpoint: GridRoutingInstrumentationCheckpoint
+): void {
+  metrics.routeOrder.length = checkpoint.routeOrderLength;
+  metrics.routes.length = checkpoint.routesLength;
+  Object.assign(metrics, checkpoint.values);
+}
+
 export function createGridRoutingInstrumentation(): GridRoutingInstrumentation {
   return {
     containersBuilt: 0,

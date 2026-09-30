@@ -12,8 +12,10 @@ import {
 import type { Rect } from '../layout-utils/types.js';
 import { isAncestorGroup } from './groups.js';
 import {
+  createGridRoutingInstrumentationCheckpoint,
   GridRoutingResourceLimitError,
   recordGridRoute,
+  restoreGridRoutingInstrumentationCheckpoint,
   type GridRoutingFallbackReason,
   type GridRoutingInstrumentation,
 } from './routerInstrumentation.js';
@@ -3230,23 +3232,7 @@ export function routeGridEdges(
     );
     const instrumentedLength = instrumentedRoutes?.length ?? 0;
     const metricSnapshot = metrics
-      ? {
-          routeOrderLength: metrics.routeOrder.length,
-          routesLength: metrics.routes.length,
-          routesFound: metrics.routesFound,
-          routeLength: metrics.routeLength,
-          bendCount: metrics.bendCount,
-          crossingCount: metrics.crossingCount,
-          sharedLength: metrics.sharedLength,
-          hierarchyBoundaryTransitions: metrics.hierarchyBoundaryTransitions,
-          hierarchyPortalPairs: metrics.hierarchyPortalPairs,
-          hierarchyPortalTransitionLength: metrics.hierarchyPortalTransitionLength,
-          hierarchyPortalAlternativeSelections: metrics.hierarchyPortalAlternativeSelections,
-          compatibilitySegments: metrics.compatibilitySegments,
-          compatibilityRecoveries: metrics.compatibilityRecoveries,
-          bundleSeparationRelaxations: metrics.bundleSeparationRelaxations,
-          routesImpossible: metrics.routesImpossible,
-        }
+      ? createGridRoutingInstrumentationCheckpoint(metrics)
       : undefined;
     const restorePairState = (): void => {
       pairRoutes.delete(pairPlans[0].pairKey);
@@ -3268,22 +3254,7 @@ export function routeGridEdges(
         instrumentedRoutes.length = instrumentedLength;
       }
       if (metrics && metricSnapshot) {
-        metrics.routeOrder.length = metricSnapshot.routeOrderLength;
-        metrics.routes.length = metricSnapshot.routesLength;
-        metrics.routesFound = metricSnapshot.routesFound;
-        metrics.routeLength = metricSnapshot.routeLength;
-        metrics.bendCount = metricSnapshot.bendCount;
-        metrics.crossingCount = metricSnapshot.crossingCount;
-        metrics.sharedLength = metricSnapshot.sharedLength;
-        metrics.hierarchyBoundaryTransitions = metricSnapshot.hierarchyBoundaryTransitions;
-        metrics.hierarchyPortalPairs = metricSnapshot.hierarchyPortalPairs;
-        metrics.hierarchyPortalTransitionLength = metricSnapshot.hierarchyPortalTransitionLength;
-        metrics.hierarchyPortalAlternativeSelections =
-          metricSnapshot.hierarchyPortalAlternativeSelections;
-        metrics.compatibilitySegments = metricSnapshot.compatibilitySegments;
-        metrics.compatibilityRecoveries = metricSnapshot.compatibilityRecoveries;
-        metrics.bundleSeparationRelaxations = metricSnapshot.bundleSeparationRelaxations;
-        metrics.routesImpossible = metricSnapshot.routesImpossible;
+        restoreGridRoutingInstrumentationCheckpoint(metrics, metricSnapshot);
       }
     };
 
