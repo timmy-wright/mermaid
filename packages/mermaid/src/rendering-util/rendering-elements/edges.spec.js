@@ -16,6 +16,7 @@ import {
   insertEdge,
   resolveEdgeCornerRadius,
   resolveEdgeCurveType,
+  setTerminalWidth,
 } from './edges.js';
 import { getConfig } from '../../diagram-api/diagramAPI.js';
 import { computeLabelTransform } from '../labelTransform.js';
@@ -327,5 +328,21 @@ describe('insertEdge orthogonal endpoint clipping', () => {
       { x: 50, y: 15 },
       { x: 110, y: 15 },
     ]);
+  });
+});
+
+describe('setTerminalWidth', () => {
+  // #8329: a hard-coded 12px height clipped the bottom of cardinalities whose text is 21px tall.
+  it('never sizes the terminal label box smaller than the measured label', () => {
+    const fo = { style: {} };
+    setTerminalWidth(fo, '0..1', { width: 23.4, height: 21 });
+    expect(parseFloat(fo.style.height)).toBeGreaterThanOrEqual(21);
+    expect(parseFloat(fo.style.width)).toBeGreaterThanOrEqual(23.4);
+  });
+
+  it('keeps the width reserved per character for short labels', () => {
+    const fo = { style: {} };
+    setTerminalWidth(fo, '1', { width: 7.8, height: 21 });
+    expect(fo.style.width).toBe('9px');
   });
 });
