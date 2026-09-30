@@ -105,6 +105,22 @@ describe('grid layout core', () => {
     expect(byId.get('peer')).toMatchObject({ x: 140, y: 50 });
   });
 
+  it('returns a forest backed by the caller-owned nodes', () => {
+    const owner = group('owner', 'Owner');
+    const child = leaf('child', 40, 20, { row: 1, column: 1 }, owner.id);
+    const peer = leaf('peer', 40, 20, { row: 1, column: 2 });
+    const data = layout([owner, child, peer]);
+
+    const result = runGridLayoutCore(data);
+
+    expect(result.forest.nodeById.get(owner.id)).toBe(owner);
+    expect(result.forest.nodeById.get(child.id)).toBe(child);
+    expect(result.forest.groupById.get(owner.id)).toBe(owner);
+    expect(result.forest.childrenByParent.get(owner.id)).toEqual([child]);
+    expect(result.forest.rootChildren).toEqual([owner, peer]);
+    expect(result.forest.postOrderGroups).toEqual([owner]);
+  });
+
   it('sizes nested groups bottom-up and keeps coordinates direction-independent', () => {
     const build = (direction: string) =>
       layout(

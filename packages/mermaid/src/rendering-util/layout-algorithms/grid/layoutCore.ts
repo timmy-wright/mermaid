@@ -430,6 +430,40 @@ function cloneGridLayoutData(data: GridLayoutData): GridLayoutData {
   };
 }
 
+function rebindGridForest(forest: GridForest, nodes: Node[]): GridForest {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const originalNode = (node: Node): Node => {
+    const original = nodeById.get(node.id);
+    if (!original) {
+      throw new Error(`Missing committed grid node "${node.id}"`);
+    }
+    return original;
+  };
+  const originalGroup = (group: Node & { isGroup: true }): Node & { isGroup: true } => {
+    const original = originalNode(group);
+    if (!original.isGroup) {
+      throw new Error(`Committed grid node "${group.id}" is no longer a group`);
+    }
+    return original as Node & { isGroup: true };
+  };
+
+  return {
+    nodeById,
+    groupById: new Map(
+      [...forest.groupById].map(([groupId, group]) => [groupId, originalGroup(group)])
+    ),
+    childrenByParent: new Map(
+      [...forest.childrenByParent].map(([parentId, children]) => [
+        parentId,
+        children.map(originalNode),
+      ])
+    ),
+    rootChildren: forest.rootChildren.map(originalNode),
+    postOrderGroups: forest.postOrderGroups.map(originalGroup),
+    helperNodeIds: new Set(forest.helperNodeIds),
+  };
+}
+
 function runGridLayoutCoreInPlace(
   data: GridLayoutData,
   metrics?: GridRoutingInstrumentation,
@@ -474,19 +508,14 @@ export function runGridLayoutCore(
   routingOptions?: GridRoutingOptions
 ): GridLayoutResult {
   const data = data4Layout as GridLayoutData;
-  const forest = buildGridForest(data.nodes);
-  const config = readGridConfig(data);
-  const sourceOrder = buildGridSourceOrder(data.nodes.filter((node) => !isEdgeLabelNode(node)));
-  validateGridPlacementMap(
-    data.nodes.filter((node) => !isEdgeLabelNode(node)),
-    config
-  );
-  validatePlacementsBeforeLayout(forest, config, sourceOrder);
 
   // Routing and label placement are transactional: a failed recovery must not leave partial
   // coordinates on the shared render model. Commit only the geometry from a complete run.
   const working = cloneGridLayoutData(data);
   const result = runGridLayoutCoreInPlace(working, metrics, routingOptions);
   commitGridGeometry(working, data);
-  return result;
+  return {
+    ...result,
+    forest: rebindGridForest(result.forest, data.nodes),
+  };
 }
