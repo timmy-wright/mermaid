@@ -25,6 +25,7 @@ describe('grid routing instrumentation checkpoints', () => {
     expect(Object.keys(gridRoutingMetricDisposition).sort()).toEqual(
       Object.keys(createGridRoutingInstrumentation()).sort()
     );
+    expect(gridRoutingMetricDisposition.compatibilityFastPaths).toBe('cumulative');
   });
 
   it('restores committed output while preserving work performed', () => {

@@ -99,7 +99,7 @@ export const gridRoutingMetricDisposition = {
   fallbackValidationFailures: 'cumulative',
   compatibilitySegments: 'transactional',
   compatibilityFastPathAttempts: 'cumulative',
-  compatibilityFastPaths: 'transactional',
+  compatibilityFastPaths: 'cumulative',
   compatibilityFastPathValidationFailures: 'cumulative',
   compatibilityFastPathNonMinimalRoutes: 'cumulative',
   compatibilityRecoveries: 'transactional',
@@ -129,7 +129,6 @@ export interface GridRoutingInstrumentationCheckpoint {
     | 'routesFound'
     | 'routesImpossible'
     | 'compatibilitySegments'
-    | 'compatibilityFastPaths'
     | 'compatibilityRecoveries'
     | 'bundleSeparationRelaxations'
     | 'routeLength'
@@ -153,7 +152,6 @@ export function createGridRoutingInstrumentationCheckpoint(
       routesFound: metrics.routesFound,
       routesImpossible: metrics.routesImpossible,
       compatibilitySegments: metrics.compatibilitySegments,
-      compatibilityFastPaths: metrics.compatibilityFastPaths,
       compatibilityRecoveries: metrics.compatibilityRecoveries,
       bundleSeparationRelaxations: metrics.bundleSeparationRelaxations,
       routeLength: metrics.routeLength,
