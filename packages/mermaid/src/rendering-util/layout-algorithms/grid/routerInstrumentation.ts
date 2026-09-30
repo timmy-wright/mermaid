@@ -11,7 +11,8 @@ export type GridRoutingFallbackReason =
 export class GridRoutingResourceLimitError extends Error {
   constructor(
     public readonly reason: GridRoutingFallbackReason,
-    message: string
+    message: string,
+    public readonly searchStateScope?: 'edge' | 'invocation'
   ) {
     super(message);
     this.name = 'GridRoutingResourceLimitError';

@@ -1013,6 +1013,7 @@ function buildRoutingContext(
     topologies: new Map(),
     fallbackContainers: new Map(),
     searchBudget: { expandedStates: 0 },
+    searchBudgetWarningEmitted: false,
     baseEstimatedBytes: 0,
     metrics,
   };
@@ -1697,20 +1698,33 @@ function routingPointKey(point: RouterPoint): string {
 }
 
 function recordFallback(
-  metrics: GridRoutingInstrumentation | undefined,
+  context: GridRoutingContext,
   reason: GridRoutingFallbackReason,
   edgeId: string,
-  containerId: GridContainerId
+  containerId: GridContainerId,
+  searchStateScope?: GridRoutingResourceLimitError['searchStateScope']
 ): void {
-  if (metrics) {
-    metrics.resourceLimitFallbacks++;
-    metrics.fallbackReasons[reason]++;
+  if (context.metrics) {
+    context.metrics.resourceLimitFallbacks++;
+    context.metrics.fallbackReasons[reason]++;
   }
   log.debug(ROUTER_DEBUG_KEY, 'GRID_ROUTING_RESOURCE_FALLBACK', {
     edgeId,
     containerId,
     reason,
   });
+  if (
+    reason === 'search_state_cap' &&
+    searchStateScope === 'invocation' &&
+    !context.searchBudgetWarningEmitted
+  ) {
+    context.searchBudgetWarningEmitted = true;
+    log.warn(ROUTER_DEBUG_KEY, 'GRID_ROUTING_INVOCATION_SEARCH_BUDGET_EXHAUSTED', {
+      edgeId,
+      containerId,
+      expandedStates: context.searchBudget.expandedStates,
+    });
+  }
 }
 
 /*
@@ -1756,7 +1770,7 @@ function sparseSameContainerRoute(
     | undefined;
   if (fallbackReason) {
     const legacy = legacyRoute();
-    recordFallback(context.metrics, fallbackReason, plan.edge.id, plan.lcaContainerId);
+    recordFallback(context, fallbackReason, plan.edge.id, plan.lcaContainerId);
     if (
       !validateSameContainerRoute(legacy, source, target, plan.lcaContainerId, result) ||
       (plan.bundleSize > 1 && !routeSatisfiesPairConstraints(legacy, pairRoutes))
@@ -1789,7 +1803,7 @@ function sparseSameContainerRoute(
   }
 
   let best: { result: RouterSearchResult; points: Point[] } | undefined;
-  let searchCap: GridRoutingFallbackReason | undefined;
+  let searchCap: GridRoutingResourceLimitError | undefined;
   const pairs = sources
     .flatMap((sourceCandidate) =>
       targets.map((targetCandidate) => {
@@ -1900,13 +1914,19 @@ function sparseSameContainerRoute(
       if (best) {
         break;
       }
-      searchCap = error.reason;
+      searchCap = error;
       break;
     }
   }
   if (searchCap) {
     const legacy = legacyRoute();
-    recordFallback(context.metrics, searchCap, plan.edge.id, plan.lcaContainerId);
+    recordFallback(
+      context,
+      searchCap.reason,
+      plan.edge.id,
+      plan.lcaContainerId,
+      searchCap.searchStateScope
+    );
     if (
       !validateSameContainerRoute(legacy, source, target, plan.lcaContainerId, result) ||
       (plan.bundleSize > 1 && !routeSatisfiesPairConstraints(legacy, pairRoutes))
@@ -1916,7 +1936,7 @@ function sparseSameContainerRoute(
       }
       throw gridError('GRID_ROUTE_NOT_FOUND', `Invalid legacy fallback for "${plan.edge.id}"`, {
         edgeId: plan.edge.id,
-        reason: searchCap,
+        reason: searchCap.reason,
       });
     }
     return legacy;
@@ -2018,7 +2038,7 @@ function sparseSelfLoopRoute(
     routeObstacleClearSelfLoop(owner, ownerSideCounts, selfLoopCounts, result);
   if (fallbackReason) {
     const legacy = legacyRoute();
-    recordFallback(context.metrics, fallbackReason, plan.edge.id, containerId);
+    recordFallback(context, fallbackReason, plan.edge.id, containerId);
     if (
       !validateSameContainerRoute(legacy.points, owner, owner, containerId, result) ||
       !routeSatisfiesPairConstraints(legacy.points, pairRoutes)
@@ -2106,7 +2126,7 @@ function sparseSelfLoopRoute(
         throw error;
       }
       const legacy = legacyRoute();
-      recordFallback(context.metrics, error.reason, plan.edge.id, containerId);
+      recordFallback(context, error.reason, plan.edge.id, containerId, error.searchStateScope);
       if (
         !validateSameContainerRoute(legacy.points, owner, owner, containerId, result) ||
         !routeSatisfiesPairConstraints(legacy.points, pairRoutes)
@@ -2152,7 +2172,7 @@ function sparseContainerSegment(
     | undefined;
   if (fallbackReason) {
     const legacy = legacyRoute();
-    recordFallback(context.metrics, fallbackReason, edgeId, containerId);
+    recordFallback(context, fallbackReason, edgeId, containerId);
     if (
       !validateContainerSegment(legacy, start.ownerId, end.ownerId, containerId, result) ||
       !routeSatisfiesPairConstraints(legacy, pairRoutes)
@@ -2333,7 +2353,7 @@ function sparseContainerSegment(
       throw error;
     }
     const legacy = legacyRoute();
-    recordFallback(context.metrics, error.reason, edgeId, containerId);
+    recordFallback(context, error.reason, edgeId, containerId, error.searchStateScope);
     if (
       !validateContainerSegment(legacy, start.ownerId, end.ownerId, containerId, result) ||
       !routeSatisfiesPairConstraints(legacy, pairRoutes)

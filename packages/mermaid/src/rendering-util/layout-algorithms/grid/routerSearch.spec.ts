@@ -185,9 +185,28 @@ describe('grid router search', () => {
     ).toThrowError(
       expect.objectContaining({
         reason: 'search_state_cap',
+        searchStateScope: 'edge',
       })
     );
     expect(metrics.expandedStates).toBe(1);
+  });
+
+  it('distinguishes invocation search-state exhaustion', () => {
+    const topology = build([{ id: 'center', left: 40, right: 60, top: 30, bottom: 70 }]);
+    const source = vertexAt(topology, { x: 0, y: 24 });
+    const target = vertexAt(topology, { x: 100, y: 76 });
+
+    expect(() =>
+      findShortestRoute(topology, source, target, {
+        budget: { expandedStates: 1 },
+        caps: { maxInvocationExpandedStates: 1 },
+      })
+    ).toThrowError(
+      expect.objectContaining({
+        reason: 'search_state_cap',
+        searchStateScope: 'invocation',
+      })
+    );
   });
 
   it('rejects malformed graph invariants without treating them as no-route', () => {

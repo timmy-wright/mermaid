@@ -58,6 +58,25 @@ Removing the corridor router requires more than replacing its call sites. Sparse
 After those gates hold, the corridor router, corridor metadata, resource fallback, compatibility
 instrumentation, and obsolete tests can be removed together.
 
+## Search budgets
+
+Sparse routing has two deterministic search-state limits:
+
+- a per-search cap that prevents one endpoint or portal search from consuming unbounded work
+- an invocation cap shared by all sparse searches in one grid render
+
+The shared cap bounds total routing CPU work across all edges and containers. Edges are processed in
+a deterministic order, so the allocation and resulting geometry are reproducible. If an edge has
+already found a valid candidate before a later candidate reaches the cap, Mermaid keeps that valid
+candidate. After the invocation budget is exhausted, later routes that still require sparse search
+use the validated corridor fallback. Edges accepted by the corridor fast path do not consume the
+sparse-search budget.
+
+This is a safety bound, not a fairness guarantee. A complex edge early in the route order can leave
+less search capacity for unrelated later edges. When the shared invocation budget is first
+exhausted, Mermaid emits one warning with the first affected edge and container. Individual
+fallbacks remain available through routing instrumentation and debug logging.
+
 ## Nested groups
 
 For an edge that crosses a group boundary, the router selects a legal crossing point that avoids the group title and corners. An edge that crosses several nested groups is assembled from routes within each group.

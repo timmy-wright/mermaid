@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { log } from '../../../logger.js';
 import type { Edge, LayoutData, Node } from '../../types.js';
 import { normalizePolyline } from '../layout-utils/geometry.js';
 import { validateLayout } from '../layout-utils/validateLayout.js';
@@ -803,6 +804,39 @@ describe('grid router', () => {
       { x: 206, y: 200 },
       { x: 240, y: 200 },
     ]);
+  });
+
+  it('warns once when the shared invocation search budget is exhausted', () => {
+    const data = baseLayout(
+      [
+        leaf('a', 80, 40, { row: 1, column: 1 }),
+        leaf('b', 80, 40, { row: 1, column: 2 }),
+        leaf('c', 80, 40, { row: 1, column: 3 }),
+      ],
+      [edge('a-b', 'a', 'b'), edge('b-c', 'b', 'c')],
+      { columnGap: 60 }
+    );
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const metrics = createGridRoutingInstrumentation();
+
+    try {
+      runGridLayoutCore(data, metrics, {
+        searchCaps: { maxInvocationExpandedStates: 1 },
+      });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        'grid-router',
+        'GRID_ROUTING_INVOCATION_SEARCH_BUDGET_EXHAUSTED',
+        expect.objectContaining({
+          edgeId: expect.any(String),
+          containerId: ROOT_CONTAINER_ID,
+          expandedStates: 1,
+        })
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('does not fall back when endpoint capacity makes a route impossible', () => {

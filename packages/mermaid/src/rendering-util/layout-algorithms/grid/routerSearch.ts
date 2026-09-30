@@ -540,9 +540,12 @@ function search(
     }
     if (expandedThisSearch >= edgeCap || invocationStart + expandedThisSearch >= invocationCap) {
       commitExpandedStates();
+      const searchStateScope =
+        invocationStart + expandedThisSearch >= invocationCap ? 'invocation' : 'edge';
       throw new GridRoutingResourceLimitError(
         'search_state_cap',
-        'Grid routing search-state cap exceeded'
+        'Grid routing search-state cap exceeded',
+        searchStateScope
       );
     }
     expandedThisSearch++;

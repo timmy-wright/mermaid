@@ -125,6 +125,7 @@ export interface GridRoutingContext {
   topologies: Map<GridContainerId, ContainerRoutingTopology>;
   fallbackContainers: Map<GridContainerId, string>;
   searchBudget: { expandedStates: number };
+  searchBudgetWarningEmitted: boolean;
   baseEstimatedBytes: number;
   metrics?: GridRoutingInstrumentation;
 }
