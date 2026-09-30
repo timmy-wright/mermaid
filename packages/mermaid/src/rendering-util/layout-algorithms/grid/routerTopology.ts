@@ -1,3 +1,4 @@
+import { compareCodeUnits } from '../layout-utils/helpers.js';
 import {
   GridRoutingResourceLimitError,
   type GridRoutingInstrumentation,
@@ -421,7 +422,7 @@ function mergeIntervals(
   intervals: { low: number; high: number; id: string }[]
 ): { low: number; high: number; id: string }[] {
   const sorted = [...intervals].sort(
-    (a, b) => a.low - b.low || a.high - b.high || a.id.localeCompare(b.id)
+    (a, b) => a.low - b.low || a.high - b.high || compareCodeUnits(a.id, b.id)
   );
   const merged: { low: number; high: number; id: string }[] = [];
   for (const interval of sorted) {
@@ -431,7 +432,7 @@ function mergeIntervals(
       continue;
     }
     previous.high = Math.max(previous.high, interval.high);
-    if (interval.id.localeCompare(previous.id) < 0) {
+    if (compareCodeUnits(interval.id, previous.id) < 0) {
       previous.id = interval.id;
     }
   }
@@ -474,7 +475,7 @@ function unionObstacles(obstacles: readonly RouterObstacle[]): RouterObstacle[] 
       const previous = previousByInterval.get(key);
       if (previous) {
         previous.right = right;
-        if (interval.id.localeCompare(previous.id) < 0) {
+        if (compareCodeUnits(interval.id, previous.id) < 0) {
           previous.id = interval.id;
         }
       } else {
@@ -499,7 +500,7 @@ function unionObstacles(obstacles: readonly RouterObstacle[]): RouterObstacle[] 
       a.left - b.left ||
       a.bottom - b.bottom ||
       a.right - b.right ||
-      a.id.localeCompare(b.id)
+      compareCodeUnits(a.id, b.id)
   );
 }
 
@@ -521,11 +522,11 @@ function sideOrdinal(side?: GridSide): number {
 
 function vertexRecordOrder(a: VertexRecord, b: VertexRecord): number {
   return (
-    a.kind.localeCompare(b.kind) ||
+    compareCodeUnits(a.kind, b.kind) ||
     sideOrdinal(a.side) - sideOrdinal(b.side) ||
     a.point.x - b.point.x ||
     a.point.y - b.point.y ||
-    (a.ownerId ?? '').localeCompare(b.ownerId ?? '')
+    compareCodeUnits(a.ownerId ?? '', b.ownerId ?? '')
   );
 }
 
@@ -842,7 +843,7 @@ function buildVisibilityGraph(
     arcs.sort(
       (a, b) =>
         arcKindOrder[a.kind] - arcKindOrder[b.kind] ||
-        a.orientation.localeCompare(b.orientation) ||
+        compareCodeUnits(a.orientation, b.orientation) ||
         vertices[a.to].point.x - vertices[b.to].point.x ||
         vertices[a.to].point.y - vertices[b.to].point.y ||
         a.to - b.to
@@ -964,7 +965,7 @@ export function buildContainerRoutingTopology(
       sideOrdinal(a.side) - sideOrdinal(b.side) ||
       a.low - b.low ||
       a.high - b.high ||
-      a.ownerId.localeCompare(b.ownerId)
+      compareCodeUnits(a.ownerId, b.ownerId)
   );
 
   const seeds = canonicalRecords([
@@ -1186,8 +1187,8 @@ export function buildEndpointRoutingOverlay(
   for (const [id, arcs] of adjacency) {
     arcs.sort(
       (a, b) =>
-        a.kind.localeCompare(b.kind) ||
-        a.orientation.localeCompare(b.orientation) ||
+        compareCodeUnits(a.kind, b.kind) ||
+        compareCodeUnits(a.orientation, b.orientation) ||
         vertexAt(a.to).point.x - vertexAt(b.to).point.x ||
         vertexAt(a.to).point.y - vertexAt(b.to).point.y ||
         a.to - b.to

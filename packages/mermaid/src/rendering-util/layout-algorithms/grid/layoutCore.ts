@@ -1,4 +1,5 @@
 import type { LayoutData, Node } from '../../types.js';
+import { compareCodeUnits } from '../layout-utils/helpers.js';
 import { positionGridEdgeLabels } from './edgeLabels.js';
 import { buildGridForest } from './groups.js';
 import {
@@ -34,7 +35,7 @@ function sortBySourceOrder(items: Node[], sourceOrder: Map<string, number>): Nod
     if (aOrder !== bOrder) {
       return aOrder - bOrder;
     }
-    return a.id.localeCompare(b.id);
+    return compareCodeUnits(a.id, b.id);
   });
 }
 

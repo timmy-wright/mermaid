@@ -2,7 +2,7 @@ import { log } from '../../../logger.js';
 import type { Point } from '../../../types.js';
 import type { Edge, LayoutData, Node } from '../../types.js';
 import { EPS, normalizePolyline } from '../layout-utils/geometry.js';
-import { polylineIntersectsRect, rectForNode } from '../layout-utils/helpers.js';
+import { compareCodeUnits, polylineIntersectsRect, rectForNode } from '../layout-utils/helpers.js';
 import type { Rect } from '../layout-utils/types.js';
 import { isAncestorGroup } from './groups.js';
 import {
@@ -231,7 +231,8 @@ function buildPairLanes(edges: Edge[]): Map<string, PairLane> {
   for (const [pairKey, entries] of byPair) {
     entries.sort(
       (a, b) =>
-        `${a.start}|${a.end}`.localeCompare(`${b.start}|${b.end}`) || a.id.localeCompare(b.id)
+        compareCodeUnits(`${a.start}|${a.end}`, `${b.start}|${b.end}`) ||
+        compareCodeUnits(a.id, b.id)
     );
     entries.forEach((edge, index) =>
       out.set(edge.id, {
@@ -397,7 +398,9 @@ function assignDemandCoordinates(
       low = Math.max(low, owner.groupTitleRect.bottom + PORT_MARGIN);
     }
     const span = Math.max(0, high - low);
-    demands.sort((a, b) => a.oppositeCoord - b.oppositeCoord || a.edgeId.localeCompare(b.edgeId));
+    demands.sort(
+      (a, b) => a.oppositeCoord - b.oppositeCoord || compareCodeUnits(a.edgeId, b.edgeId)
+    );
     const demandPlans = demands.map((demand) => planByEdgeId.get(demand.edgeId));
     const pairKeys = new Set(demandPlans.map((plan) => plan?.pairKey));
     const compactHierarchyPortals =
@@ -1123,12 +1126,13 @@ function compareEndpointDemands(
   const bCoord = side === 'left' || side === 'right' ? bRect.cy : bRect.cx;
   return (
     aCoord - bCoord ||
-    endpointPairKey(a.plan.edge).localeCompare(endpointPairKey(b.plan.edge)) ||
-    `${a.plan.edge.start}|${a.plan.edge.end}`.localeCompare(
+    compareCodeUnits(endpointPairKey(a.plan.edge), endpointPairKey(b.plan.edge)) ||
+    compareCodeUnits(
+      `${a.plan.edge.start}|${a.plan.edge.end}`,
       `${b.plan.edge.start}|${b.plan.edge.end}`
     ) ||
-    a.plan.edge.id.localeCompare(b.plan.edge.id) ||
-    a.role.localeCompare(b.role)
+    compareCodeUnits(a.plan.edge.id, b.plan.edge.id) ||
+    compareCodeUnits(a.role, b.role)
   );
 }
 
@@ -1138,12 +1142,13 @@ function endpointDemandKey(demand: EndpointDemandEntry): string {
 
 function compareEndpointDemandIdentity(a: EndpointDemandEntry, b: EndpointDemandEntry): number {
   return (
-    endpointPairKey(a.plan.edge).localeCompare(endpointPairKey(b.plan.edge)) ||
-    `${a.plan.edge.start}|${a.plan.edge.end}`.localeCompare(
+    compareCodeUnits(endpointPairKey(a.plan.edge), endpointPairKey(b.plan.edge)) ||
+    compareCodeUnits(
+      `${a.plan.edge.start}|${a.plan.edge.end}`,
       `${b.plan.edge.start}|${b.plan.edge.end}`
     ) ||
-    a.plan.edge.id.localeCompare(b.plan.edge.id) ||
-    a.role.localeCompare(b.role)
+    compareCodeUnits(a.plan.edge.id, b.plan.edge.id) ||
+    compareCodeUnits(a.role, b.role)
   );
 }
 
@@ -2534,9 +2539,9 @@ export function routeGridEdges(
       bBoundaryCount - aBoundaryCount ||
       (endpointCandidateProducts.get(a.edge.id) ?? 0) -
         (endpointCandidateProducts.get(b.edge.id) ?? 0) ||
-      aUnordered.localeCompare(bUnordered) ||
-      aDirected.localeCompare(bDirected) ||
-      a.edge.id.localeCompare(b.edge.id)
+      compareCodeUnits(aUnordered, bUnordered) ||
+      compareCodeUnits(aDirected, bDirected) ||
+      compareCodeUnits(a.edge.id, b.edge.id)
     );
   });
   const demandCoords = assignDemandCoordinates(orderedPlans, result);
@@ -3282,7 +3287,7 @@ export function routeGridEdges(
           bBoundaryCount - aBoundaryCount ||
           Math.abs(b.laneOffset) - Math.abs(a.laneOffset) ||
           a.laneOffset - b.laneOffset ||
-          a.edge.id.localeCompare(b.edge.id)
+          compareCodeUnits(a.edge.id, b.edge.id)
         );
       });
       let retryError: unknown;

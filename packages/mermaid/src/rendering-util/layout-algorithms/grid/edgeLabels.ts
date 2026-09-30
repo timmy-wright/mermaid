@@ -2,6 +2,7 @@ import type { Point } from '../../../types.js';
 import type { Edge, LayoutData, Node, NonClusterNode } from '../../types.js';
 import { normalizePolyline, type Segment } from '../layout-utils/geometry.js';
 import {
+  compareCodeUnits,
   polylineIntersectsRect,
   rectForNode,
   segmentIntersectsRectInterior,
@@ -194,7 +195,7 @@ class CompressedBoundsIndex<T extends { id: string; bounds: Bounds }> {
   query(bounds: Bounds): T[] {
     if (this.dirty) {
       this.sortedByLeft = [...this.entriesById.values()].sort(
-        (a, b) => a.bounds.left - b.bounds.left || a.id.localeCompare(b.id)
+        (a, b) => a.bounds.left - b.bounds.left || compareCodeUnits(a.id, b.id)
       );
       this.dirty = false;
     }
@@ -722,7 +723,7 @@ function foreignEdgeIdsIntersectingRect(
       ids.add(entry.edgeId);
     }
   }
-  return [...ids].sort((a, b) => a.localeCompare(b));
+  return [...ids].sort(compareCodeUnits);
 }
 
 function obstacleBandQueryBounds(segment: Segment, labelNode: Node): Bounds | null {
@@ -2057,7 +2058,7 @@ export function positionGridEdgeLabels(
   };
 
   const workItems = [...labelledEdges].sort(
-    (a, b) => a.sourceIndex - b.sourceIndex || a.edge.id.localeCompare(b.edge.id)
+    (a, b) => a.sourceIndex - b.sourceIndex || compareCodeUnits(a.edge.id, b.edge.id)
   );
   let lastError: unknown;
   for (let pass = 1; pass <= 2; pass++) {

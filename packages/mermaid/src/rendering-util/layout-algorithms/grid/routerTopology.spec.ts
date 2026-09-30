@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { compareCodeUnits } from '../layout-utils/helpers.js';
 import { createGridRoutingInstrumentation } from './routerInstrumentation.js';
 import {
   buildContainerRoutingTopology,
@@ -188,8 +189,8 @@ describe('grid router topology', () => {
       expect(arcs).toEqual(
         [...arcs].sort(
           (a, b) =>
-            a.kind.localeCompare(b.kind) ||
-            a.orientation.localeCompare(b.orientation) ||
+            compareCodeUnits(a.kind, b.kind) ||
+            compareCodeUnits(a.orientation, b.orientation) ||
             forward.vertices[a.to].point.x - forward.vertices[b.to].point.x ||
             forward.vertices[a.to].point.y - forward.vertices[b.to].point.y ||
             a.to - b.to

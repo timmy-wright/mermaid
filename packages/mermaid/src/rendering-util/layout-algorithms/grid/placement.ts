@@ -7,6 +7,7 @@ import {
 } from '../../../utils/gridPlacement.js';
 import { resolveEdgeCornerRadius } from '../../edgeCornerRadius.js';
 import type { Node } from '../../types.js';
+import { compareCodeUnits } from '../layout-utils/helpers.js';
 import {
   GRID_DEFAULTS,
   type GridCurve,
@@ -158,7 +159,7 @@ function itemComparator(sourceOrder: Map<string, number>) {
     if (aOrder !== bOrder) {
       return aOrder - bOrder;
     }
-    return a.id.localeCompare(b.id);
+    return compareCodeUnits(a.id, b.id);
   };
 }
 
