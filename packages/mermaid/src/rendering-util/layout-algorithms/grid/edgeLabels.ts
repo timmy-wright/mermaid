@@ -2,6 +2,7 @@ import type { Point } from '../../../types.js';
 import type { Edge, LayoutData, Node, NonClusterNode } from '../../types.js';
 import { normalizePolyline, type Segment } from '../layout-utils/geometry.js';
 import {
+  clamp,
   compareCodeUnits,
   polylineIntersectsRect,
   rectForNode,
@@ -414,12 +415,12 @@ function rangeOverlaps(aStart: number, aEnd: number, bStart: number, bEnd: numbe
 }
 
 function clampInterval(interval: Interval, low: number, high: number): Interval | null {
-  const start = Math.max(low, Math.min(interval.start, interval.end));
-  const end = Math.min(high, Math.max(interval.start, interval.end));
+  const start = clamp(Math.min(interval.start, interval.end), low, high);
+  const end = clamp(Math.max(interval.start, interval.end), low, high);
   return end - start > LABEL_EPSILON ? { start, end } : null;
 }
 
-function mergeIntervals(intervals: Interval[], low: number, high: number): Interval[] {
+function mergeBlockedLabelIntervals(intervals: Interval[], low: number, high: number): Interval[] {
   const clamped = intervals
     .map((interval) => clampInterval(interval, low, high))
     .filter((interval): interval is Interval => interval !== null)
@@ -454,7 +455,7 @@ function centerCandidatesFromIntervals(
 
   const allowed: Interval[] = [];
   let cursor = low;
-  for (const interval of mergeIntervals(blocked, low, high)) {
+  for (const interval of mergeBlockedLabelIntervals(blocked, low, high)) {
     if (interval.start - cursor > LABEL_EPSILON) {
       allowed.push({ start: cursor, end: interval.start });
     }
@@ -465,7 +466,7 @@ function centerCandidatesFromIntervals(
   }
 
   const candidates = allowed.map((interval) => ({
-    value: Math.max(interval.start, Math.min(preferred, interval.end)),
+    value: clamp(preferred, interval.start, interval.end),
     start: interval.start,
     end: interval.end,
   }));

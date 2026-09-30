@@ -22,7 +22,7 @@ export const ROUTE_CLEARANCE_PX = 6;
 
 const DEFAULT_MAX_VERTICES = 50_000;
 const DEFAULT_MAX_ADJACENCY_ENTRIES = 200_000;
-const DEFAULT_MAX_ESTIMATED_BYTES = 64 * 1024 * 1024;
+export const DEFAULT_MAX_ROUTING_ESTIMATED_BYTES = 64 * 1024 * 1024;
 
 export interface RouterObstacleInput {
   id: string;
@@ -418,7 +418,7 @@ function inflateAndClip(
   return obstacle.left < obstacle.right && obstacle.top < obstacle.bottom ? obstacle : undefined;
 }
 
-function mergeIntervals(
+function mergeObstacleIntervals(
   intervals: { low: number; high: number; id: string }[]
 ): { low: number; high: number; id: string }[] {
   const sorted = [...intervals].sort(
@@ -464,7 +464,7 @@ function unionObstacles(obstacles: readonly RouterObstacle[]): RouterObstacle[] 
       active.add(obstacle);
     }
     const nextByInterval = new Map<string, RouterObstacle>();
-    for (const interval of mergeIntervals(
+    for (const interval of mergeObstacleIntervals(
       [...active].map((obstacle) => ({
         low: obstacle.top,
         high: obstacle.bottom,
@@ -636,7 +636,7 @@ function createIntervalIndex(
   }
   const active = new Set<RouterObstacle>();
   const activeIntervals = () =>
-    mergeIntervals(
+    mergeObstacleIntervals(
       [...active].map((obstacle) =>
         orientation === 'H'
           ? { low: obstacle.left, high: obstacle.right, id: obstacle.id }
@@ -1001,7 +1001,7 @@ export function buildContainerRoutingTopology(
   );
   enforceCap(
     estimatedBytes,
-    options.caps?.maxEstimatedBytes ?? DEFAULT_MAX_ESTIMATED_BYTES,
+    options.caps?.maxEstimatedBytes ?? DEFAULT_MAX_ROUTING_ESTIMATED_BYTES,
     'estimated_memory_cap'
   );
 

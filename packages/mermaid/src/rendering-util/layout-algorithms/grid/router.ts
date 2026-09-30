@@ -2,7 +2,13 @@ import { log } from '../../../logger.js';
 import type { Point } from '../../../types.js';
 import type { Edge, LayoutData, Node } from '../../types.js';
 import { PIXEL_EPSILON, normalizePolyline } from '../layout-utils/geometry.js';
-import { compareCodeUnits, polylineIntersectsRect, rectForNode } from '../layout-utils/helpers.js';
+import {
+  clamp,
+  compareCodeUnits,
+  manhattanLength,
+  polylineIntersectsRect,
+  rectForNode,
+} from '../layout-utils/helpers.js';
 import type { Rect } from '../layout-utils/types.js';
 import { isAncestorGroup } from './groups.js';
 import {
@@ -23,6 +29,7 @@ import {
   buildPairedPortal,
   buildContainerRoutingTopology,
   buildEndpointRoutingOverlay,
+  DEFAULT_MAX_ROUTING_ESTIMATED_BYTES,
   derivePortalRanges,
   EndpointOverlayScratch,
   ROUTE_CLEARANCE_PX,
@@ -53,7 +60,6 @@ const TERMINAL_APPROACH_PX = 20;
 const MIN_PORT_SEPARATION_PX = 4;
 const LANE_SEPARATION_PX = 8;
 const ROUTER_DEBUG_KEY = 'grid-router';
-const DEFAULT_MAX_ESTIMATED_BYTES = 64 * 1024 * 1024;
 
 export interface GridRoutingDualRouteComparison {
   edgeId: string;
@@ -304,7 +310,7 @@ export function assignCompactPortalCoordinates(
     coordinates.reduce((sum, coordinate) => sum + coordinate, 0) / coordinates.length;
   const minimumShift = low - coordinates[0];
   const maximumShift = high - coordinates[coordinates.length - 1];
-  const shift = Math.max(minimumShift, Math.min(maximumShift, averageDesired - averageAssigned));
+  const shift = clamp(averageDesired - averageAssigned, minimumShift, maximumShift);
   return coordinates.map((coordinate) => coordinate + shift);
 }
 
@@ -430,7 +436,7 @@ function assignDemandCoordinates(
           ? container?.horizontalCorridors
           : container?.verticalCorridors;
       const preferredCoordinate = (demand: GridAttachmentDemand): number => {
-        const clamped = Math.max(low, Math.min(high, demand.preferredCoord));
+        const clamped = clamp(demand.preferredCoord, low, high);
         const nearest = corridorCoordinates?.reduce(
           (best, coordinate) =>
             Math.abs(coordinate - clamped) < Math.abs(best - clamped) ? coordinate : best,
@@ -1043,7 +1049,7 @@ function buildRoutingContext(
         { caps: options.topologyCaps }
       );
       const invocationMemoryCap =
-        options.topologyCaps?.maxEstimatedBytes ?? DEFAULT_MAX_ESTIMATED_BYTES;
+        options.topologyCaps?.maxEstimatedBytes ?? DEFAULT_MAX_ROUTING_ESTIMATED_BYTES;
       if (estimatedBytes + topology.estimatedBytes > invocationMemoryCap) {
         context.fallbackContainers.set(containerId, 'estimated_memory_cap');
         continue;
@@ -1180,7 +1186,7 @@ function preferredEndpointCoordinates(
   if (sorted.length === 1) {
     const rect = rectForNode(owner);
     const center = side === 'left' || side === 'right' ? rect.cy : rect.cx;
-    return new Map([[sorted[0], Math.max(interval.low, Math.min(interval.high, center))]]);
+    return new Map([[sorted[0], clamp(center, interval.low, interval.high)]]);
   }
   if ((interval.high - interval.low) / (sorted.length - 1) < MIN_PORT_SEPARATION_PX) {
     return new Map(
@@ -1193,7 +1199,7 @@ function preferredEndpointCoordinates(
   const desired = sorted.map(({ opposite }) => {
     const rect = rectForNode(opposite);
     const coordinate = side === 'left' || side === 'right' ? rect.cy : rect.cx;
-    return Math.max(interval.low, Math.min(interval.high, coordinate));
+    return clamp(coordinate, interval.low, interval.high);
   });
   const coordinates: number[] = [];
   for (const [index, element] of desired.entries()) {
@@ -1206,7 +1212,7 @@ function preferredEndpointCoordinates(
     coordinates.reduce((sum, coordinate) => sum + coordinate, 0) / coordinates.length;
   const minimumShift = interval.low - coordinates[0];
   const maximumShift = interval.high - coordinates[coordinates.length - 1];
-  const shift = Math.max(minimumShift, Math.min(maximumShift, averageDesired - averageAssigned));
+  const shift = clamp(averageDesired - averageAssigned, minimumShift, maximumShift);
   return new Map(sorted.map((demand, index) => [demand, coordinates[index] + shift]));
 }
 
@@ -1540,14 +1546,6 @@ function validatedCompatibilitySegment(
   });
 }
 
-function routeLength(points: readonly Point[]): number {
-  return normalizePolyline([...points]).segments.reduce(
-    (total, segment) =>
-      total + Math.abs(segment.a.x - segment.b.x) + Math.abs(segment.a.y - segment.b.y),
-    0
-  );
-}
-
 interface OrthogonalSegment {
   a: Point;
   b: Point;
@@ -1853,7 +1851,7 @@ function sparseSameContainerRoute(
         context.baseEstimatedBytes + overlay.estimatedBytes - topology.estimatedBytes;
       if (
         liveEstimatedBytes >
-        (options.topologyCaps?.maxEstimatedBytes ?? DEFAULT_MAX_ESTIMATED_BYTES)
+        (options.topologyCaps?.maxEstimatedBytes ?? DEFAULT_MAX_ROUTING_ESTIMATED_BYTES)
       ) {
         throw new GridRoutingResourceLimitError(
           'estimated_memory_cap',
@@ -1882,7 +1880,7 @@ function sparseSameContainerRoute(
           maxEstimatedBytes:
             options.searchCaps?.maxEstimatedBytes ??
             options.topologyCaps?.maxEstimatedBytes ??
-            DEFAULT_MAX_ESTIMATED_BYTES,
+            DEFAULT_MAX_ROUTING_ESTIMATED_BYTES,
         },
         endpointCandidateRank: pairRank,
         recordOutcome: false,
@@ -1970,12 +1968,12 @@ function sparseSameContainerRoute(
       edgeId: plan.edge.id,
       sparse: {
         valid: true,
-        length: routeLength(best.points),
+        length: manhattanLength(sparseNormalized.points),
         bends: sparseNormalized.bends,
       },
       legacy: {
         valid: validateSameContainerRoute(legacy, source, target, plan.lcaContainerId, result),
-        length: routeLength(legacy),
+        length: manhattanLength(legacyNormalized.points),
         bends: legacyNormalized.bends,
       },
     });
@@ -2098,7 +2096,7 @@ function sparseSelfLoopRoute(
           maxEstimatedBytes:
             options.searchCaps?.maxEstimatedBytes ??
             options.topologyCaps?.maxEstimatedBytes ??
-            DEFAULT_MAX_ESTIMATED_BYTES,
+            DEFAULT_MAX_ROUTING_ESTIMATED_BYTES,
         },
         recordOutcome: false,
         budget: context.searchBudget,
@@ -2277,7 +2275,7 @@ function sparseContainerSegment(
         context.baseEstimatedBytes + overlay.estimatedBytes - topology.estimatedBytes;
       if (
         liveEstimatedBytes >
-        (options.topologyCaps?.maxEstimatedBytes ?? DEFAULT_MAX_ESTIMATED_BYTES)
+        (options.topologyCaps?.maxEstimatedBytes ?? DEFAULT_MAX_ROUTING_ESTIMATED_BYTES)
       ) {
         throw new GridRoutingResourceLimitError(
           'estimated_memory_cap',
@@ -2299,7 +2297,7 @@ function sparseContainerSegment(
           maxEstimatedBytes:
             options.searchCaps?.maxEstimatedBytes ??
             options.topologyCaps?.maxEstimatedBytes ??
-            DEFAULT_MAX_ESTIMATED_BYTES,
+            DEFAULT_MAX_ROUTING_ESTIMATED_BYTES,
         },
         recordOutcome: false,
         budget: context.searchBudget,
@@ -2706,7 +2704,7 @@ export function routeGridEdges(
       }
       continue;
     }
-    if (routeLength(route) !== lowerBoundLength) {
+    if (manhattanLength(normalized.points) !== lowerBoundLength) {
       if (metrics) {
         metrics.compatibilityFastPathNonMinimalRoutes++;
       }
@@ -2778,7 +2776,7 @@ export function routeGridEdges(
       rect,
       owner.groupTitleRect ? { ...owner.groupTitleRect } : undefined,
       entry.side,
-      Math.max(range.low, Math.min(range.high, coordinate))
+      clamp(coordinate, range.low, range.high)
     );
     pairedPortals.set(entry.demandKey, portal);
     if (metrics) {
