@@ -26,6 +26,15 @@ const assertFiniteEdgePaths = async (page: Parameters<typeof diagramSvg>[0]) => 
   }
 };
 
+const nodeCenter = async (page: Parameters<typeof diagramSvg>[0], label: string) => {
+  const box = await page.locator('svg g.node').filter({ hasText: label }).first().boundingBox();
+  expect(box).not.toBeNull();
+  return {
+    x: box!.x + box!.width / 2,
+    y: box!.y + box!.height / 2,
+  };
+};
+
 test.describe('grid layout rendering', () => {
   test('flowchart grid keeps accessibility text, links, callbacks, and inline placement ordering', async ({
     page,
@@ -208,18 +217,104 @@ Customer --> Login`,
     }
   });
 
+  test('class, state, requirement, and use case authored ids determine configured grid columns', async ({
+    page,
+  }, testInfo) => {
+    const cases = [
+      {
+        name: 'class-authored-placement-ids',
+        leftLabel: 'Second class',
+        rightLabel: 'First class',
+        source: `---
+config:
+  layout: grid
+  grid:
+    placements:
+      ClassOne: { row: 1, column: 2 }
+      ClassTwo: { row: 1, column: 1 }
+---
+classDiagram
+  class ClassOne["First class"]
+  class ClassTwo["Second class"]
+  ClassOne --> ClassTwo`,
+      },
+      {
+        name: 'state-authored-placement-ids',
+        leftLabel: 'Review state',
+        rightLabel: 'Draft state',
+        source: `---
+config:
+  layout: grid
+  grid:
+    placements:
+      Draft: { row: 1, column: 2 }
+      Review: { row: 1, column: 1 }
+---
+stateDiagram-v2
+  state "Draft state" as Draft
+  state "Review state" as Review
+  Draft --> Review`,
+      },
+      {
+        name: 'requirement-authored-placement-ids',
+        leftLabel: 'checkout_service',
+        rightLabel: 'checkout_req',
+        source: `---
+config:
+  layout: grid
+  grid:
+    placements:
+      checkout_req: { row: 1, column: 2 }
+      checkout_service: { row: 1, column: 1 }
+---
+requirementDiagram
+  requirement checkout_req {
+    id: 1
+    text: Orders must be payable online.
+    risk: high
+    verifymethod: test
+  }
+  element checkout_service {
+    type: service
+  }
+  checkout_service - satisfies -> checkout_req`,
+      },
+      {
+        name: 'usecase-authored-placement-ids',
+        leftLabel: 'Sign in',
+        rightLabel: 'Customer',
+        source: `---
+config:
+  layout: grid
+  grid:
+    placements:
+      Customer: { row: 1, column: 2 }
+      Login: { row: 1, column: 1 }
+---
+usecase-beta
+  actor Customer
+  Login("Sign in")
+  Customer --> Login`,
+      },
+    ];
+
+    for (const item of cases) {
+      await renderGraph(page, testInfo, item.source, {
+        screenshot: false,
+        name: `grid-${item.name}`,
+      });
+      await assertFiniteViewBox(page);
+      await assertFiniteEdgePaths(page);
+
+      const left = await nodeCenter(page, item.leftLabel);
+      const right = await nodeCenter(page, item.rightLabel);
+      expect(left.x).toBeLessThan(right.x);
+    }
+  });
+
   test('ER and mindmap authored ids determine configured grid rows and columns', async ({
     page,
   }, testInfo) => {
-    const nodeCenter = async (label: string) => {
-      const box = await page.locator('svg g.node').filter({ hasText: label }).first().boundingBox();
-      expect(box).not.toBeNull();
-      return {
-        x: box!.x + box!.width / 2,
-        y: box!.y + box!.height / 2,
-      };
-    };
-
     await renderGraph(
       page,
       testInfo,
@@ -240,10 +335,10 @@ erDiagram
       { screenshot: false, name: 'grid-er-authored-placement-ids' }
     );
 
-    const customer = await nodeCenter('CUSTOMER');
-    const order = await nodeCenter('ORDER');
-    const lineItem = await nodeCenter('LINE_ITEM');
-    const payment = await nodeCenter('PAYMENT');
+    const customer = await nodeCenter(page, 'CUSTOMER');
+    const order = await nodeCenter(page, 'ORDER');
+    const lineItem = await nodeCenter(page, 'LINE_ITEM');
+    const payment = await nodeCenter(page, 'PAYMENT');
     expect(customer.x).toBeLessThan(order.x);
     expect(order.x).toBeLessThan(lineItem.x);
     expect(order.y).toBeLessThan(payment.y);
@@ -271,11 +366,11 @@ mindmap
       { screenshot: false, name: 'grid-mindmap-authored-placement-ids' }
     );
 
-    const release = await nodeCenter('Release');
-    const plan = await nodeCenter('Plan');
-    const build = await nodeCenter('Build');
-    const test = await nodeCenter('Test');
-    const deploy = await nodeCenter('Deploy');
+    const release = await nodeCenter(page, 'Release');
+    const plan = await nodeCenter(page, 'Plan');
+    const build = await nodeCenter(page, 'Build');
+    const test = await nodeCenter(page, 'Test');
+    const deploy = await nodeCenter(page, 'Deploy');
     expect(plan.x).toBeLessThan(release.x);
     expect(release.x).toBeLessThan(test.x);
     expect(plan.y).toBeLessThan(release.y);
