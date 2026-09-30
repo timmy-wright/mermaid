@@ -627,7 +627,13 @@ export const insertEdge = function (
 
   if (edge.portClipping === 'outline-orthogonal' && !skipIntersect) {
     points = clipOrthogonalEndpointsToNodeOutlines(points, tail, head);
-  } else if (layout === 'swimlane') {
+  }
+
+  // Edge endpoint clipping. The swimlanes layout produces orthogonal edges whose
+  // axis-aligned entry/exit segments must be preserved, so it uses a dedicated
+  // boundary-clipping path. Every other layout (dagre, ELK, …) keeps the original
+  // clipping below, so their edge ports are unaffected by swimlanes.
+  if (layout === 'swimlane') {
     if (head.intersect && tail.intersect && Array.isArray(points) && points.length >= 2) {
       if (points.length === 2) {
         // Simple straight edge: just clip the two endpoints to the node boundaries.
