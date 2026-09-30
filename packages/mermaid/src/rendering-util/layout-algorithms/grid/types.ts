@@ -82,8 +82,6 @@ export interface RouterArc {
   kind: 'visibility' | 'terminal' | 'portal' | 'lane';
   intervalStart: number;
   intervalEnd: number;
-  occupiedLength?: number;
-  crossingCount?: number;
 }
 
 export interface RouterSearchArc {
@@ -91,8 +89,6 @@ export interface RouterSearchArc {
   orientationOrdinal: 1 | 2;
   length: number;
   boundaryTransitions: 0 | 1;
-  occupiedLength: number;
-  crossings: number;
 }
 
 export interface OrthogonalIntervalIndex {
@@ -125,14 +121,9 @@ export interface ContainerRoutingTopology {
   getSearchArcs?(id: RouterVertexId): readonly RouterSearchArc[];
 }
 
-export interface RouteOccupancyIndex {
-  readonly routes: readonly (readonly RouterPoint[])[];
-}
-
 export interface GridRoutingContext {
   topologies: Map<GridContainerId, ContainerRoutingTopology>;
   fallbackContainers: Map<GridContainerId, string>;
-  occupancy: RouteOccupancyIndex;
   searchBudget: { expandedStates: number };
   baseEstimatedBytes: number;
   metrics?: GridRoutingInstrumentation;

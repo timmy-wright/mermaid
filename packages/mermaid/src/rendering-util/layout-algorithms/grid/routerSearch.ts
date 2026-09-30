@@ -17,8 +17,6 @@ export type RouterTupleCost = [
   length: number,
   bends: number,
   boundaryTransitions: number,
-  occupiedLength: number,
-  crossings: number,
   endpointCandidateRank: number,
 ];
 
@@ -67,8 +65,6 @@ export class RouterSearchWorkspace {
   gLengths = new Float64Array(256);
   gBends = new Float64Array(256);
   gBoundaryTransitions = new Float64Array(256);
-  gOccupiedLengths = new Float64Array(256);
-  gCrossings = new Float64Array(256);
   fLengths = new Float64Array(256);
   fBends = new Float64Array(256);
   predecessors = new Int32Array(256);
@@ -98,8 +94,6 @@ export class RouterSearchWorkspace {
     this.gLengths = growTypedArray(this.gLengths, capacity);
     this.gBends = growTypedArray(this.gBends, capacity);
     this.gBoundaryTransitions = growTypedArray(this.gBoundaryTransitions, capacity);
-    this.gOccupiedLengths = growTypedArray(this.gOccupiedLengths, capacity);
-    this.gCrossings = growTypedArray(this.gCrossings, capacity);
     this.fLengths = growTypedArray(this.fLengths, capacity);
     this.fBends = growTypedArray(this.fBends, capacity);
     this.predecessors = growTypedArray(this.predecessors, capacity);
@@ -116,8 +110,6 @@ export class RouterSearchWorkspace {
       this.gLengths.byteLength +
       this.gBends.byteLength +
       this.gBoundaryTransitions.byteLength +
-      this.gOccupiedLengths.byteLength +
-      this.gCrossings.byteLength +
       this.fLengths.byteLength +
       this.fBends.byteLength +
       this.predecessors.byteLength +
@@ -140,7 +132,7 @@ function growTypedArray<T extends Int32Array | Uint8Array | Float64Array>(
   return grown;
 }
 export function compareTupleCost(a: RouterTupleCost, b: RouterTupleCost): number {
-  for (let index = 0; index < 6; index++) {
+  for (let index = 0; index < 4; index++) {
     if (a[index] < b[index]) {
       return -1;
     }
@@ -152,7 +144,7 @@ export function compareTupleCost(a: RouterTupleCost, b: RouterTupleCost): number
 }
 
 export function addTupleCost(a: RouterTupleCost, b: RouterTupleCost): RouterTupleCost {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3], a[4] + b[4], a[5] + b[5]];
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]];
 }
 
 function minimumBends(
@@ -197,7 +189,7 @@ export function tupleHeuristic(
   const dx = Math.abs(from.x - to.x);
   const dy = Math.abs(from.y - to.y);
   const bends = minimumBends(dx, dy, incomingOrientation, targetOrientation);
-  return [dx + dy, bends, 0, 0, 0, 0];
+  return [dx + dy, bends, 0, 0];
 }
 
 function orientationOrdinal(orientation: GridOrientation | undefined): number {
@@ -340,8 +332,6 @@ function search(
   let gLengths = workspace.gLengths;
   let gBends = workspace.gBends;
   let gBoundaryTransitions = workspace.gBoundaryTransitions;
-  let gOccupiedLengths = workspace.gOccupiedLengths;
-  let gCrossings = workspace.gCrossings;
   let fLengths = workspace.fLengths;
   let fBends = workspace.fBends;
   let predecessors = workspace.predecessors;
@@ -367,8 +357,6 @@ function search(
       fLengths[a] - fLengths[b] ||
       fBends[a] - fBends[b] ||
       gBoundaryTransitions[a] - gBoundaryTransitions[b] ||
-      gOccupiedLengths[a] - gOccupiedLengths[b] ||
-      gCrossings[a] - gCrossings[b] ||
       (options.queueOrder === 'reverse' ? -nonCostOrder(a, b) : nonCostOrder(a, b))
     );
   }
@@ -496,8 +484,6 @@ function search(
   gLengths[0] = initialLength;
   gBends[0] = 0;
   gBoundaryTransitions[0] = 0;
-  gOccupiedLengths[0] = 0;
-  gCrossings[0] = 0;
   const initialDx = Math.abs(source.point.x - target.point.x);
   const initialDy = Math.abs(source.point.y - target.point.y);
   fLengths[0] = initialLength + (useBendHeuristic ? initialDx + initialDy : 0);
@@ -524,8 +510,6 @@ function search(
           ? 1
           : 0),
       gBoundaryTransitions[state],
-      gOccupiedLengths[state],
-      gCrossings[state],
       endpointCandidateRank,
     ];
     if (
@@ -546,9 +530,7 @@ function search(
       (fLengths[next] - bestGoalCost[0] ||
         fBends[next] - bestGoalCost[1] ||
         gBoundaryTransitions[next] - bestGoalCost[2] ||
-        gOccupiedLengths[next] - bestGoalCost[3] ||
-        gCrossings[next] - bestGoalCost[4] ||
-        endpointCandidateRank - bestGoalCost[5]) > 0
+        endpointCandidateRank - bestGoalCost[3]) > 0
     ) {
       break;
     }
@@ -602,15 +584,11 @@ function search(
           gBends[current] +
           (orientations[current] !== 0 && orientations[current] !== orientation ? 1 : 0);
         const boundaryTransitions = gBoundaryTransitions[current] + arc.boundaryTransitions;
-        const occupiedLength = gOccupiedLengths[current] + arc.occupiedLength;
-        const crossings = gCrossings[current] + arc.crossings;
         const previousComparison =
           previous >= 0
             ? length - gLengths[previous] ||
               bends - gBends[previous] ||
-              boundaryTransitions - gBoundaryTransitions[previous] ||
-              occupiedLength - gOccupiedLengths[previous] ||
-              crossings - gCrossings[previous]
+              boundaryTransitions - gBoundaryTransitions[previous]
             : -1;
         if (
           previous >= 0 &&
@@ -627,8 +605,6 @@ function search(
           gLengths = workspace.gLengths;
           gBends = workspace.gBends;
           gBoundaryTransitions = workspace.gBoundaryTransitions;
-          gOccupiedLengths = workspace.gOccupiedLengths;
-          gCrossings = workspace.gCrossings;
           fLengths = workspace.fLengths;
           fBends = workspace.fBends;
           predecessors = workspace.predecessors;
@@ -643,8 +619,6 @@ function search(
         gLengths[candidate] = length;
         gBends[candidate] = bends;
         gBoundaryTransitions[candidate] = boundaryTransitions;
-        gOccupiedLengths[candidate] = occupiedLength;
-        gCrossings[candidate] = crossings;
         const candidateDx = Math.abs(nextPoint.x - target.point.x);
         const candidateDy = Math.abs(nextPoint.y - target.point.y);
         fLengths[candidate] = length + (useBendHeuristic ? candidateDx + candidateDy : 0);
@@ -696,15 +670,11 @@ function search(
           gBends[current] +
           (orientations[current] !== 0 && orientations[current] !== orientation ? 1 : 0);
         const boundaryTransitions = gBoundaryTransitions[current] + (arc.kind === 'portal' ? 1 : 0);
-        const occupiedLength = gOccupiedLengths[current] + (arc.occupiedLength ?? 0);
-        const crossings = gCrossings[current] + (arc.crossingCount ?? 0);
         const previousComparison =
           previous >= 0
             ? length - gLengths[previous] ||
               bends - gBends[previous] ||
-              boundaryTransitions - gBoundaryTransitions[previous] ||
-              occupiedLength - gOccupiedLengths[previous] ||
-              crossings - gCrossings[previous]
+              boundaryTransitions - gBoundaryTransitions[previous]
             : -1;
         if (
           previous >= 0 &&
@@ -721,8 +691,6 @@ function search(
           gLengths = workspace.gLengths;
           gBends = workspace.gBends;
           gBoundaryTransitions = workspace.gBoundaryTransitions;
-          gOccupiedLengths = workspace.gOccupiedLengths;
-          gCrossings = workspace.gCrossings;
           fLengths = workspace.fLengths;
           fBends = workspace.fBends;
           predecessors = workspace.predecessors;
@@ -737,8 +705,6 @@ function search(
         gLengths[candidate] = length;
         gBends[candidate] = bends;
         gBoundaryTransitions[candidate] = boundaryTransitions;
-        gOccupiedLengths[candidate] = occupiedLength;
-        gCrossings[candidate] = crossings;
         const candidateDx = Math.abs(nextPoint.x - target.point.x);
         const candidateDy = Math.abs(nextPoint.y - target.point.y);
         fLengths[candidate] = length + (useBendHeuristic ? candidateDx + candidateDy : 0);

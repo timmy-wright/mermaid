@@ -1012,7 +1012,6 @@ function buildRoutingContext(
   const context: GridRoutingContext = {
     topologies: new Map(),
     fallbackContainers: new Map(),
-    occupancy: { routes: [] },
     searchBudget: { expandedStates: 0 },
     baseEstimatedBytes: 0,
     metrics,
@@ -1746,7 +1745,6 @@ function sparseSameContainerRoute(
         reason: fallbackReason,
       });
     }
-    (context.occupancy.routes as RouterPoint[][]).push(legacy);
     return legacy;
   }
   const topology = context.topologies.get(plan.lcaContainerId);
@@ -1773,7 +1771,7 @@ function sparseSameContainerRoute(
       targets.map((targetCandidate) => {
         const pairRank = sourceCandidate.rank * targets.length + targetCandidate.rank;
         const [length, bends] = endpointPairLowerBound(sourceCandidate, targetCandidate);
-        const lowerCost: RouterTupleCost = [length, bends, 0, 0, 0, pairRank];
+        const lowerCost: RouterTupleCost = [length, bends, 0, pairRank];
         return { sourceCandidate, targetCandidate, pairRank, lowerCost };
       })
     )
@@ -1897,7 +1895,6 @@ function sparseSameContainerRoute(
         reason: searchCap,
       });
     }
-    (context.occupancy.routes as RouterPoint[][]).push(legacy);
     return legacy;
   }
   if (!best) {
@@ -1932,7 +1929,6 @@ function sparseSameContainerRoute(
       },
     });
   }
-  (context.occupancy.routes as RouterPoint[][]).push(best.points);
   return best.points;
 }
 
@@ -2818,7 +2814,6 @@ export function routeGridEdges(
       edge.cornerRadius = result.config.edgeCornerRadius;
       committedPairRoutes.push(points);
       pairRoutes.set(plan.pairKey, committedPairRoutes);
-      (context.occupancy.routes as RouterPoint[][]).push(points);
       if (metrics && instrumentedRoutes) {
         recordGridRoute(metrics, edge.id, points, instrumentedRoutes, 0, plan.laneOffset);
         instrumentedRoutes.push(points);
@@ -2906,7 +2901,6 @@ export function routeGridEdges(
           if (metrics) {
             metrics.compatibilityFastPaths++;
           }
-          (context.occupancy.routes as RouterPoint[][]).push(compatibilityFastRoute);
           return compatibilityFastRoute;
         })()
       : eligibleIds.has(edge.id)
@@ -3086,10 +3080,9 @@ export function routeGridEdges(
       continue;
     }
 
-    // A bundle is the retry unit because earlier siblings reserve corridors and portals for later
-    // ones. Restore every shared structure before changing route order or the retry becomes biased.
-    const occupancyRoutes = context.occupancy.routes as RouterPoint[][];
-    const occupancyLength = occupancyRoutes.length;
+    // A bundle is the retry unit because earlier siblings reserve pair corridors and portals for
+    // later ones. Restore every shared structure before changing route order or the retry becomes
+    // biased.
     const portalSnapshot = new Map(pairedPortals);
     const demandSnapshot = new Map(demandCoords);
     const edgeSnapshot = new Map(
@@ -3123,7 +3116,6 @@ export function routeGridEdges(
         }
       : undefined;
     const restorePairState = (): void => {
-      occupancyRoutes.length = occupancyLength;
       pairRoutes.delete(pairPlans[0].pairKey);
       pairedPortals.clear();
       for (const [key, portal] of portalSnapshot) {

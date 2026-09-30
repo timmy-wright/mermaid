@@ -722,6 +722,31 @@ function indexVertexLines(
 }
 
 function searchArcs(arcs: readonly RouterArc[]): readonly RouterSearchArc[] {
+  /*
+   * Occupancy and crossing tie-breakers are left for future route-quality work.
+   *
+   * A minimal implementation could scan every committed route segment for every candidate arc:
+   * - Sum collinear overlap into an occupied-length cost.
+   * - Count perpendicular interior intersections as crossings.
+   * - Pass those values into the search arcs.
+   * - Recompute them after each committed route.
+   *
+   * That approach is simple, but likely too expensive: roughly routes x route segments x graph
+   * arcs for each edge search. It also risks inconsistent handling of endpoints, terminal
+   * segments, portals, and touching-versus-crossing geometry.
+   *
+   * A production-quality implementation would need:
+   * - A container-scoped horizontal/vertical segment index.
+   * - Efficient overlap and perpendicular-intersection queries.
+   * - Dynamic search or overlay costs without mutating the immutable base topology.
+   * - Updates only after route validation succeeds.
+   * - Rollback support for bundle retries.
+   * - Clear rules for endpoint touches, partial shared arcs, hierarchy segments, and routes that
+   *   span multiple containers.
+   * - Search tests proving occupancy changes only the intended late tie-breakers.
+   * - Routing tests showing reduced sharing and crossings.
+   * - Performance tests for the 500-edge contract.
+   */
   return Object.freeze(
     arcs.map((arc) =>
       Object.freeze({
@@ -729,8 +754,6 @@ function searchArcs(arcs: readonly RouterArc[]): readonly RouterSearchArc[] {
         orientationOrdinal: arc.orientation === 'H' ? 1 : 2,
         length: arc.length,
         boundaryTransitions: arc.kind === 'portal' ? 1 : 0,
-        occupiedLength: arc.occupiedLength ?? 0,
-        crossings: arc.crossingCount ?? 0,
       } as const)
     )
   );
