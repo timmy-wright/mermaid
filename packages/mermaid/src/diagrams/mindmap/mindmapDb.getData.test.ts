@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MindmapDB } from './mindmapDb.js';
 import type { MindmapLayoutNode, MindmapLayoutEdge } from './mindmapDb.js';
 import type { Edge } from '../../rendering-util/types.js';
+import type * as ConfigModule from '../../config.js';
+import { getUserDefinedConfig } from '../../config.js';
+import { log } from '../../logger.js';
 
 // Mock the getConfig function
 vi.mock('../../diagram-api/diagramAPI.js', () => ({
@@ -15,10 +18,19 @@ vi.mock('../../diagram-api/diagramAPI.js', () => ({
   })),
 }));
 
+vi.mock('../../config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof ConfigModule>();
+  return {
+    ...actual,
+    getUserDefinedConfig: vi.fn(() => ({})),
+  };
+});
+
 describe('MindmapDb getData function', () => {
   let db: MindmapDB;
 
   beforeEach(() => {
+    vi.mocked(getUserDefinedConfig).mockReturnValue({});
     db = new MindmapDB();
     // Clear the database before each test
     db.clear();
@@ -143,6 +155,28 @@ describe('MindmapDb getData function', () => {
 
       expect(edgeIds).toHaveLength(3);
       expect(uniqueIds.size).toBe(3); // All IDs should be unique
+    });
+
+    it('warns when a grid placement targets duplicate authored node IDs', () => {
+      vi.mocked(getUserDefinedConfig).mockReturnValue({
+        layout: 'grid',
+        grid: {
+          placements: {
+            duplicate: { row: 1 },
+          },
+        },
+      });
+      const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+      db.addNode(0, 'root', 'Root', 0);
+      db.addNode(1, 'duplicate', 'First', 0);
+      db.addNode(1, 'duplicate', 'Second', 0);
+
+      db.getData();
+
+      expect(warn).toHaveBeenCalledWith(
+        'Grid placement "duplicate" matches 2 mindmap nodes with the same authored ID; all of them will receive that placement.'
+      );
+      warn.mockRestore();
     });
 
     it('should handle nodes with missing optional properties', () => {
