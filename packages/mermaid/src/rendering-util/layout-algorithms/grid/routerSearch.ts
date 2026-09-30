@@ -6,10 +6,7 @@ import type {
   ContainerRoutingTopology,
   GridOrientation,
   GridSide,
-  RouterArc,
-  RouterObstacle,
   RouterPoint,
-  RouterRect,
   RouterVertex,
 } from './types.js';
 
@@ -143,10 +140,6 @@ export function compareTupleCost(a: RouterTupleCost, b: RouterTupleCost): number
   return 0;
 }
 
-export function addTupleCost(a: RouterTupleCost, b: RouterTupleCost): RouterTupleCost {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]];
-}
-
 function minimumBends(
   dx: number,
   dy: number,
@@ -178,18 +171,6 @@ function minimumBends(
       1 +
       (targetOrientation ? Number(targetOrientation !== 'H') : 0)
   );
-}
-
-export function tupleHeuristic(
-  from: RouterPoint,
-  to: RouterPoint,
-  incomingOrientation?: GridOrientation,
-  targetOrientation?: GridOrientation
-): RouterTupleCost {
-  const dx = Math.abs(from.x - to.x);
-  const dy = Math.abs(from.y - to.y);
-  const bends = minimumBends(dx, dy, incomingOrientation, targetOrientation);
-  return [dx + dy, bends, 0, 0];
 }
 
 function orientationOrdinal(orientation: GridOrientation | undefined): number {
@@ -761,129 +742,4 @@ export function findShortestRoute(
   options: RouterSearchOptions = {}
 ): RouterSearchResult | undefined {
   return search(topology, sourceId, targetId, options, true);
-}
-
-interface DenseOracleInput {
-  bounds: RouterRect;
-  obstacles: readonly RouterObstacle[];
-  source: RouterPoint;
-  target: RouterPoint;
-}
-
-function isBlockedPoint(point: RouterPoint, obstacles: readonly RouterObstacle[]): boolean {
-  return obstacles.some(
-    (obstacle) =>
-      point.x > obstacle.left &&
-      point.x < obstacle.right &&
-      point.y > obstacle.top &&
-      point.y < obstacle.bottom
-  );
-}
-
-function segmentBlocked(
-  orientation: GridOrientation,
-  fixed: number,
-  start: number,
-  end: number,
-  obstacles: readonly RouterObstacle[]
-): boolean {
-  const low = Math.min(start, end);
-  const high = Math.max(start, end);
-  return obstacles.some((obstacle) =>
-    orientation === 'H'
-      ? fixed > obstacle.top &&
-        fixed < obstacle.bottom &&
-        high > obstacle.left &&
-        low < obstacle.right
-      : fixed > obstacle.left &&
-        fixed < obstacle.right &&
-        high > obstacle.top &&
-        low < obstacle.bottom
-  );
-}
-
-export function findDenseOracleRoute(input: DenseOracleInput): RouterSearchResult | undefined {
-  const xs = [
-    ...new Set([
-      input.bounds.left,
-      input.bounds.right,
-      input.source.x,
-      input.target.x,
-      ...input.obstacles.flatMap(({ left, right }) => [left, right]),
-    ]),
-  ].sort((a, b) => a - b);
-  const ys = [
-    ...new Set([
-      input.bounds.top,
-      input.bounds.bottom,
-      input.source.y,
-      input.target.y,
-      ...input.obstacles.flatMap(({ top, bottom }) => [top, bottom]),
-    ]),
-  ].sort((a, b) => a - b);
-  const vertices: RouterVertex[] = [];
-  const byPoint = new Map<string, number>();
-  for (const y of ys) {
-    for (const x of xs) {
-      const point = { x, y };
-      if (!isBlockedPoint(point, input.obstacles)) {
-        const id = vertices.length;
-        vertices.push({ id, point, kind: 'projection' });
-        byPoint.set(`${x}:${y}`, id);
-      }
-    }
-  }
-  const adjacency = new Map<number, RouterArc[]>(
-    vertices.map((vertex) => [vertex.id, [] as RouterArc[]])
-  );
-  const connectLines = (orientation: GridOrientation) => {
-    const coordinates = orientation === 'H' ? ys : xs;
-    const varying = orientation === 'H' ? xs : ys;
-    for (const fixed of coordinates) {
-      let previous: RouterVertex | undefined;
-      for (const value of varying) {
-        const id = byPoint.get(orientation === 'H' ? `${value}:${fixed}` : `${fixed}:${value}`);
-        if (id === undefined) {
-          continue;
-        }
-        const current = vertices[id];
-        if (previous) {
-          const start = orientation === 'H' ? previous.point.x : previous.point.y;
-          const end = orientation === 'H' ? current.point.x : current.point.y;
-          if (!segmentBlocked(orientation, fixed, start, end, input.obstacles)) {
-            const length = end - start;
-            const intervalStart = start;
-            const intervalEnd = end;
-            adjacency.get(previous.id)!.push({
-              from: previous.id,
-              to: current.id,
-              orientation,
-              length,
-              kind: 'visibility',
-              intervalStart,
-              intervalEnd,
-            });
-            adjacency.get(current.id)!.push({
-              from: current.id,
-              to: previous.id,
-              orientation,
-              length,
-              kind: 'visibility',
-              intervalStart,
-              intervalEnd,
-            });
-          }
-        }
-        previous = current;
-      }
-    }
-  };
-  connectLines('H');
-  connectLines('V');
-  const sourceId = byPoint.get(`${input.source.x}:${input.source.y}`);
-  const targetId = byPoint.get(`${input.target.x}:${input.target.y}`);
-  if (sourceId === undefined || targetId === undefined) {
-    return undefined;
-  }
-  return search({ vertices, adjacency }, sourceId, targetId, {}, false);
 }

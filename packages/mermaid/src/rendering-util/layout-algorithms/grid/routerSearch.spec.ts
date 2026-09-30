@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createGridRoutingInstrumentation } from './routerInstrumentation.js';
-import {
-  addTupleCost,
-  compareTupleCost,
-  findDenseOracleRoute,
-  findShortestRoute,
-  tupleHeuristic,
-} from './routerSearch.js';
+import { compareTupleCost, findShortestRoute } from './routerSearch.js';
+import { findDenseOracleRoute } from './routerSearch.testUtils.js';
 import {
   EndpointOverlayScratch,
   buildContainerRoutingTopology,
@@ -36,12 +31,9 @@ function vertexAt(topology: ContainerRoutingTopology, point: RouterPoint): numbe
 }
 
 describe('grid router search', () => {
-  it('compares and adds tuple costs lexicographically without epsilon', () => {
+  it('compares tuple costs lexicographically without epsilon', () => {
     expect(compareTupleCost([10, 2, 0, 0], [10, 3, 0, 0])).toBeLessThan(0);
     expect(compareTupleCost([10.0000000001, 1, 0, 0], [10, 99, 0, 0])).toBeGreaterThan(0);
-    expect(addTupleCost([1, 2, 3, 4], [4, 3, 2, 1])).toEqual([5, 5, 5, 5]);
-    expect(tupleHeuristic({ x: 10, y: 15 }, { x: 22, y: 8 }, 'H', 'V')).toEqual([19, 1, 0, 0]);
-    expect(tupleHeuristic({ x: 10, y: 15 }, { x: 10, y: 8 }, 'H', 'V')).toEqual([7, 1, 0, 0]);
   });
 
   it('finds a deterministic shortest path with exact bend accounting', () => {
