@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { test, expect } from '@playwright/test';
-import { diagramSvg, renderGraph } from '../../helpers/util.ts';
+import { assertDiagramNotError, diagramSvg, renderGraph } from '../../helpers/util.ts';
 
 const assertFiniteViewBox = async (page: Parameters<typeof diagramSvg>[0]) => {
   const svg = diagramSvg(page).first();
@@ -118,13 +118,10 @@ flowchart TB
     expect(parseTranslate(start!.transform).y).toBeLessThan(parseTranslate(review!.transform).y);
   });
 
-  test('agentflow, class, state, ER, requirement, and use case render with grid.columns=1', async ({
-    page,
-  }, testInfo) => {
-    const cases = [
-      {
-        name: 'agentflow',
-        source: `---
+  const columnCases = [
+    {
+      name: 'agentflow',
+      source: `---
 config:
   layout: grid
   grid:
@@ -134,10 +131,10 @@ agentflow-beta TB
   a["Start"]
   b["Review"]
   a --> b`,
-      },
-      {
-        name: 'class',
-        source: `---
+    },
+    {
+      name: 'class',
+      source: `---
 config:
   layout: grid
   grid:
@@ -147,10 +144,10 @@ classDiagram
   class A
   class B
   A --> B`,
-      },
-      {
-        name: 'state',
-        source: `---
+    },
+    {
+      name: 'state',
+      source: `---
 config:
   layout: grid
   grid:
@@ -159,10 +156,10 @@ config:
 stateDiagram-v2
   [*] --> A
   A --> B`,
-      },
-      {
-        name: 'er',
-        source: `---
+    },
+    {
+      name: 'er',
+      source: `---
 config:
   layout: grid
   grid:
@@ -170,10 +167,10 @@ config:
 ---
 erDiagram
   CUSTOMER ||--o{ ORDER : places`,
-      },
-      {
-        name: 'requirement',
-        source: `---
+    },
+    {
+      name: 'requirement',
+      source: `---
 config:
   layout: grid
   grid:
@@ -190,10 +187,10 @@ requirementDiagram
     type: service
   }
   checkout_service - satisfies -> checkout_req`,
-      },
-      {
-        name: 'usecase',
-        source: `---
+    },
+    {
+      name: 'usecase',
+      source: `---
 config:
   layout: grid
   grid:
@@ -204,28 +201,26 @@ direction TB
 actor Customer
 Login("Sign in")
 Customer --> Login`,
-      },
-    ];
+    },
+  ];
 
-    for (const item of cases) {
+  for (const item of columnCases) {
+    test(`${item.name} renders with grid.columns=1`, async ({ page }, testInfo) => {
       await renderGraph(page, testInfo, item.source, {
         screenshot: false,
         name: `grid-${item.name}`,
       });
       await assertFiniteViewBox(page);
       await assertFiniteEdgePaths(page);
-    }
-  });
+    });
+  }
 
-  test('class, state, requirement, and use case authored ids determine configured grid columns', async ({
-    page,
-  }, testInfo) => {
-    const cases = [
-      {
-        name: 'class-authored-placement-ids',
-        leftLabel: 'Second class',
-        rightLabel: 'First class',
-        source: `---
+  const authoredPlacementCases = [
+    {
+      name: 'class-authored-placement-ids',
+      leftLabel: 'Second class',
+      rightLabel: 'First class',
+      source: `---
 config:
   layout: grid
   grid:
@@ -237,12 +232,12 @@ classDiagram
   class ClassOne["First class"]
   class ClassTwo["Second class"]
   ClassOne --> ClassTwo`,
-      },
-      {
-        name: 'state-authored-placement-ids',
-        leftLabel: 'Review state',
-        rightLabel: 'Draft state',
-        source: `---
+    },
+    {
+      name: 'state-authored-placement-ids',
+      leftLabel: 'Review state',
+      rightLabel: 'Draft state',
+      source: `---
 config:
   layout: grid
   grid:
@@ -254,12 +249,12 @@ stateDiagram-v2
   state "Draft state" as Draft
   state "Review state" as Review
   Draft --> Review`,
-      },
-      {
-        name: 'requirement-authored-placement-ids',
-        leftLabel: 'checkout_service',
-        rightLabel: 'checkout_req',
-        source: `---
+    },
+    {
+      name: 'requirement-authored-placement-ids',
+      leftLabel: 'checkout_service',
+      rightLabel: 'checkout_req',
+      source: `---
 config:
   layout: grid
   grid:
@@ -278,12 +273,12 @@ requirementDiagram
     type: service
   }
   checkout_service - satisfies -> checkout_req`,
-      },
-      {
-        name: 'usecase-authored-placement-ids',
-        leftLabel: 'Sign in',
-        rightLabel: 'Customer',
-        source: `---
+    },
+    {
+      name: 'usecase-authored-placement-ids',
+      leftLabel: 'Sign in',
+      rightLabel: 'Customer',
+      source: `---
 config:
   layout: grid
   grid:
@@ -295,10 +290,13 @@ usecase-beta
   actor Customer
   Login("Sign in")
   Customer --> Login`,
-      },
-    ];
+    },
+  ];
 
-    for (const item of cases) {
+  for (const item of authoredPlacementCases) {
+    test(`${item.name} uses authored ids for configured grid columns`, async ({
+      page,
+    }, testInfo) => {
       await renderGraph(page, testInfo, item.source, {
         screenshot: false,
         name: `grid-${item.name}`,
@@ -309,12 +307,10 @@ usecase-beta
       const left = await nodeCenter(page, item.leftLabel);
       const right = await nodeCenter(page, item.rightLabel);
       expect(left.x).toBeLessThan(right.x);
-    }
-  });
+    });
+  }
 
-  test('ER and mindmap authored ids determine configured grid rows and columns', async ({
-    page,
-  }, testInfo) => {
+  test('ER authored ids determine configured grid rows and columns', async ({ page }, testInfo) => {
     await renderGraph(
       page,
       testInfo,
@@ -342,7 +338,11 @@ erDiagram
     expect(customer.x).toBeLessThan(order.x);
     expect(order.x).toBeLessThan(lineItem.x);
     expect(order.y).toBeLessThan(payment.y);
+  });
 
+  test('mindmap authored ids determine configured grid rows and columns', async ({
+    page,
+  }, testInfo) => {
     await renderGraph(
       page,
       testInfo,
@@ -434,6 +434,7 @@ flowchart TB
 
     await assertFiniteViewBox(page);
     await assertFiniteEdgePaths(page);
+    await assertDiagramNotError(page);
   });
 
   test('grid flowchart keeps group titles, HTML labels, loops, and parallel routes structurally valid', async ({
@@ -492,6 +493,7 @@ flowchart LR
 
     await assertFiniteViewBox(page);
     await assertFiniteEdgePaths(page);
+    await assertDiagramNotError(page);
     await expect(page.locator('svg')).toContainText('Group');
     await expect(page.locator('svg')).toContainText('HTML label');
 
@@ -502,8 +504,8 @@ flowchart LR
     expect(new Set(pathData).size).toBe(pathData.length);
   });
 
-  test('grid renders across classic, handDrawn, and neo looks', async ({ page }, testInfo) => {
-    for (const look of ['classic', 'handDrawn', 'neo'] as const) {
+  for (const look of ['classic', 'handDrawn', 'neo'] as const) {
+    test(`grid renders with the ${look} look`, async ({ page }, testInfo) => {
       await renderGraph(
         page,
         testInfo,
@@ -520,6 +522,6 @@ flowchart TB
       );
       await assertFiniteViewBox(page);
       await assertFiniteEdgePaths(page);
-    }
-  });
+    });
+  }
 });
