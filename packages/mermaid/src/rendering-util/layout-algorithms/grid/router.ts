@@ -123,39 +123,6 @@ interface PreparedRoutingModes {
   routedContainerIds: GridContainerId[];
 }
 
-interface RouteGridPlanContext {
-  result: GridLayoutResult;
-  routingContext: GridRoutingContext;
-  searchWorkspace: RouterSearchWorkspace;
-  endpointOverlayScratch: ReadonlyMap<GridContainerId, EndpointOverlayScratch>;
-  demandCoords: Map<string, number>;
-  ownerSideCounts: Map<string, number>;
-  selfLoopCounts: Map<string, number>;
-  pairRoutes: Map<string, Point[][]>;
-  instrumentedRoutes: Point[][] | undefined;
-  metrics: GridRoutingInstrumentation | undefined;
-  options: GridRoutingOptions;
-  eligibleIds: ReadonlySet<string>;
-  endpointCandidatesByEdge: ReadonlyMap<string, EdgeRouteCandidates>;
-  compatibilityFastRoutes: ReadonlyMap<string, Point[]>;
-  sparseHierarchyIds: ReadonlySet<string>;
-  sparseLcaIds: ReadonlySet<string>;
-  pairedPortal: (entry: EdgeEndpointEntry) => PairedPortal;
-  alternativePairedPortals: (
-    entry: EdgeEndpointEntry,
-    interior?: boolean
-  ) => SegmentAttachmentAlternative[];
-  itemSegmentAttachment: (
-    entry: EdgeEndpointEntry,
-    containerId: GridContainerId
-  ) => SegmentAttachment;
-  alternativeItemAttachments: (
-    plan: EdgeRoutePlan,
-    entry: EdgeEndpointEntry,
-    containerId: GridContainerId
-  ) => SegmentAttachmentAlternative[];
-}
-
 interface BundleEdgeCheckpoint {
   edge: Edge;
   points: Edge['points'];
@@ -2860,310 +2827,6 @@ function prepareRoutingModes(
   };
 }
 
-function routeGridPlan(
-  plan: EdgeRoutePlan,
-  state: RouteGridPlanContext,
-  allowHierarchyRelaxation = true
-): void {
-  const {
-    result,
-    routingContext,
-    searchWorkspace,
-    endpointOverlayScratch,
-    demandCoords,
-    ownerSideCounts,
-    selfLoopCounts,
-    pairRoutes,
-    instrumentedRoutes,
-    metrics,
-    options,
-    eligibleIds,
-    endpointCandidatesByEdge,
-    compatibilityFastRoutes,
-    sparseHierarchyIds,
-    sparseLcaIds,
-    pairedPortal,
-    alternativePairedPortals,
-    itemSegmentAttachment,
-    alternativeItemAttachments,
-  } = state;
-  const edge = plan.edge;
-  const sourceNode = edge.start ? result.forest.nodeById.get(edge.start) : undefined;
-  const targetNode = edge.end ? result.forest.nodeById.get(edge.end) : undefined;
-  if (!sourceNode || !targetNode) {
-    throw gridError('GRID_MISSING_ENDPOINT', `Missing endpoint for edge "${edge.id}"`, {
-      edgeId: edge.id,
-    });
-  }
-
-  if (sourceNode.id === targetNode.id) {
-    const committedPairRoutes = pairRoutes.get(plan.pairKey) ?? [];
-    const { points, side, index } = sparseSelfLoopRoute(
-      plan,
-      sourceNode,
-      result,
-      routingContext,
-      searchWorkspace,
-      endpointOverlayScratch.get(sourceNode.parentId ?? ROOT_CONTAINER_ID),
-      ownerSideCounts,
-      selfLoopCounts,
-      committedPairRoutes,
-      options
-    );
-    const countKey = `${sourceNode.id}:${side}`;
-    selfLoopCounts.set(countKey, index + 1);
-    edge.points = points;
-    edge.curve = result.config.curve;
-    edge.cornerRadius = result.config.edgeCornerRadius;
-    committedPairRoutes.push(points);
-    pairRoutes.set(plan.pairKey, committedPairRoutes);
-    if (metrics && instrumentedRoutes) {
-      recordGridRoute(metrics, edge.id, points, instrumentedRoutes, 0, plan.laneOffset);
-      instrumentedRoutes.push(points);
-    }
-    return;
-  }
-
-  const sourceFinal = plan.source.chain[plan.source.chain.length - 1];
-  const targetFinal = plan.target.chain[plan.target.chain.length - 1];
-  const useSparseLca = sparseLcaIds.has(edge.id);
-  const lcaStart: SegmentAttachment = useSparseLca
-    ? plan.source.finalKind === 'boundary'
-      ? groupBoundaryEndpointAttachment(
-          sourceFinal.ownerId,
-          sourceFinal.side,
-          sourceFinal.demandKey,
-          result,
-          demandCoords
-        )
-      : plan.source.chain.length > 1
-        ? portalAttachment(pairedPortal(sourceFinal), false)
-        : itemSegmentAttachment(sourceFinal, plan.lcaContainerId)
-    : {
-        ownerId: sourceFinal.ownerId,
-        ...(plan.source.finalKind === 'boundary'
-          ? boundaryAttachment(
-              plan.lcaContainerId,
-              sourceFinal.side,
-              sourceFinal.demandKey,
-              result,
-              demandCoords
-            )
-          : itemAttachment(
-              sourceFinal.ownerId,
-              sourceFinal.side,
-              sourceFinal.demandKey,
-              plan.lcaContainerId,
-              result,
-              demandCoords
-            )),
-      };
-  const lcaEnd: SegmentAttachment = useSparseLca
-    ? plan.target.finalKind === 'boundary'
-      ? groupBoundaryEndpointAttachment(
-          targetFinal.ownerId,
-          targetFinal.side,
-          targetFinal.demandKey,
-          result,
-          demandCoords
-        )
-      : plan.target.chain.length > 1
-        ? portalAttachment(pairedPortal(targetFinal), false)
-        : itemSegmentAttachment(targetFinal, plan.lcaContainerId)
-    : {
-        ownerId: targetFinal.ownerId,
-        ...(plan.target.finalKind === 'boundary'
-          ? boundaryAttachment(
-              plan.lcaContainerId,
-              targetFinal.side,
-              targetFinal.demandKey,
-              result,
-              demandCoords
-            )
-          : itemAttachment(
-              targetFinal.ownerId,
-              targetFinal.side,
-              targetFinal.demandKey,
-              plan.lcaContainerId,
-              result,
-              demandCoords
-            )),
-      };
-  let legacyLcaPoints: Point[] | undefined;
-  const legacyRoute = () =>
-    (legacyLcaPoints ??= routeWithinContainer(
-      plan.lcaContainerId,
-      result,
-      lcaStart,
-      lcaEnd,
-      plan.laneIndex
-    ));
-  const compatibilityFastRoute = compatibilityFastRoutes.get(edge.id);
-  const lcaPoints = compatibilityFastRoute
-    ? (() => {
-        if (metrics) {
-          metrics.compatibilityFastPaths++;
-        }
-        return compatibilityFastRoute;
-      })()
-    : eligibleIds.has(edge.id)
-      ? sparseSameContainerRoute(
-          plan,
-          endpointCandidatesByEdge.get(edge.id)!.sources,
-          endpointCandidatesByEdge.get(edge.id)!.targets,
-          sourceNode,
-          targetNode,
-          legacyRoute,
-          result,
-          routingContext,
-          searchWorkspace,
-          endpointOverlayScratch.get(plan.lcaContainerId)!,
-          options,
-          pairRoutes.get(plan.pairKey) ?? []
-        )
-      : useSparseLca
-        ? sparseContainerSegment(
-            edge.id,
-            plan.lcaContainerId,
-            lcaStart,
-            lcaEnd,
-            legacyRoute,
-            result,
-            routingContext,
-            searchWorkspace,
-            endpointOverlayScratch.get(plan.lcaContainerId),
-            options,
-            pairRoutes.get(plan.pairKey) ?? [],
-            () =>
-              plan.target.finalKind === 'item' && plan.target.chain.length > 1
-                ? alternativePairedPortals(targetFinal, false)
-                : [],
-            () =>
-              plan.source.finalKind === 'item' && plan.source.chain.length > 1
-                ? alternativePairedPortals(sourceFinal, false)
-                : [],
-            plan.bundleSize > 1
-          )
-        : validatedCompatibilitySegment(
-            edge.id,
-            plan.lcaContainerId,
-            lcaStart,
-            lcaEnd,
-            legacyRoute,
-            result,
-            metrics
-          );
-
-  const routeHierarchyChain = (endpoint: EdgeEndpointPlan, chains: Point[][]): void => {
-    for (let index = 0; index < endpoint.chain.length - 1; index++) {
-      const from = endpoint.chain[index];
-      const to = endpoint.chain[index + 1];
-      if (!sparseHierarchyIds.has(edge.id)) {
-        const start: SegmentAttachment = {
-          ownerId: from.ownerId,
-          ...itemAttachment(
-            from.ownerId,
-            from.side,
-            from.demandKey,
-            to.ownerId,
-            result,
-            demandCoords
-          ),
-        };
-        const end: SegmentAttachment = {
-          ownerId: to.ownerId,
-          ...boundaryAttachment(to.ownerId, to.side, to.demandKey, result, demandCoords),
-        };
-        chains.push(
-          validatedCompatibilitySegment(
-            edge.id,
-            to.ownerId,
-            start,
-            end,
-            () => routeWithinContainer(to.ownerId, result, start, end, plan.laneIndex),
-            result,
-            metrics
-          )
-        );
-        continue;
-      }
-      const start =
-        index === 0
-          ? itemSegmentAttachment(from, to.ownerId)
-          : portalAttachment(pairedPortal(from), false);
-      const end = portalAttachment(pairedPortal(to), true);
-      chains.push(
-        sparseContainerSegment(
-          edge.id,
-          to.ownerId,
-          start,
-          end,
-          () => routeWithinContainer(to.ownerId, result, start, end, plan.laneIndex),
-          result,
-          routingContext,
-          searchWorkspace,
-          endpointOverlayScratch.get(to.ownerId),
-          options,
-          pairRoutes.get(plan.pairKey) ?? [],
-          () => alternativePairedPortals(to),
-          () => (index === 0 ? alternativeItemAttachments(plan, from, to.ownerId) : []),
-          plan.bundleSize > 1
-        )
-      );
-    }
-  };
-  const sourceChains: Point[][] = [];
-  const targetChains: Point[][] = [];
-  routeHierarchyChain(plan.source, sourceChains);
-  routeHierarchyChain(plan.target, targetChains);
-
-  const points = combinePointChains([
-    ...sourceChains,
-    lcaPoints,
-    ...targetChains.reverse().map((chain) => reversePoints(chain)),
-  ]);
-  const committedPairRoutes = pairRoutes.get(plan.pairKey) ?? [];
-  const satisfiesPairConstraints = routeSatisfiesPairConstraints(points, committedPairRoutes);
-  const relaxHierarchySeparation =
-    !satisfiesPairConstraints &&
-    plan.bundleSize > 1 &&
-    plan.source.chain.length + plan.target.chain.length > 2 &&
-    routeHasDistinctPairPorts(points, committedPairRoutes);
-  if (
-    plan.bundleSize > 1 &&
-    !satisfiesPairConstraints &&
-    (!relaxHierarchySeparation || !allowHierarchyRelaxation)
-  ) {
-    if (metrics) {
-      metrics.routesImpossible++;
-    }
-    throw gridError('GRID_ROUTE_NOT_FOUND', `No distinct lane route for "${edge.id}"`, {
-      edgeId: edge.id,
-      reason: relaxHierarchySeparation ? 'pair-separation' : 'no-distinct-route',
-    });
-  }
-  if (relaxHierarchySeparation && metrics) {
-    metrics.bundleSeparationRelaxations++;
-  }
-  edge.points = points;
-  edge.curve = result.config.curve;
-  edge.cornerRadius = result.config.edgeCornerRadius;
-  committedPairRoutes.push(points);
-  pairRoutes.set(plan.pairKey, committedPairRoutes);
-  if (metrics && instrumentedRoutes) {
-    const boundaryTransitionCount = plan.source.chain.length + plan.target.chain.length - 2;
-    recordGridRoute(
-      metrics,
-      edge.id,
-      points,
-      instrumentedRoutes,
-      boundaryTransitionCount,
-      plan.laneOffset
-    );
-    instrumentedRoutes.push(points);
-  }
-}
-
 class GridEdgeRoutingSession {
   private prepared!: PreparedEdgeRoutes;
   private modes!: PreparedRoutingModes;
@@ -3175,7 +2838,6 @@ class GridEdgeRoutingSession {
   private instrumentedRoutes!: Point[][] | undefined;
   private readonly selfLoopCounts = new Map<string, number>();
   private readonly pairRoutes = new Map<string, Point[][]>();
-  private routePlanState!: RouteGridPlanContext;
   private routed = false;
 
   constructor(
@@ -3257,29 +2919,6 @@ class GridEdgeRoutingSession {
       const key = `${ownerId}:${side}`;
       this.ownerSideCounts.set(key, (this.ownerSideCounts.get(key) ?? 0) + 1);
     }
-    this.routePlanState = {
-      result: this.result,
-      routingContext: this.routingContext,
-      searchWorkspace: this.searchWorkspace,
-      endpointOverlayScratch: this.endpointOverlayScratch,
-      demandCoords: this.prepared.demandCoords,
-      ownerSideCounts: this.ownerSideCounts,
-      selfLoopCounts: this.selfLoopCounts,
-      pairRoutes: this.pairRoutes,
-      instrumentedRoutes: this.instrumentedRoutes,
-      metrics: this.metrics,
-      options: this.options,
-      eligibleIds: this.prepared.eligibleIds,
-      endpointCandidatesByEdge: this.prepared.endpointCandidatesByEdge,
-      compatibilityFastRoutes: this.modes.compatibilityFastRoutes,
-      sparseHierarchyIds: this.modes.sparseHierarchyIds,
-      sparseLcaIds: this.modes.sparseLcaIds,
-      pairedPortal: (entry) => this.pairedPortal(entry),
-      alternativePairedPortals: (entry, interior) => this.alternativePairedPortals(entry, interior),
-      itemSegmentAttachment: (entry, containerId) => this.itemSegmentAttachment(entry, containerId),
-      alternativeItemAttachments: (plan, entry, containerId) =>
-        this.alternativeItemAttachments(plan, entry, containerId),
-    };
   }
 
   private pairedPortal(entry: EdgeEndpointEntry): PairedPortal {
@@ -3429,7 +3068,297 @@ class GridEdgeRoutingSession {
   }
 
   private routePlan(plan: EdgeRoutePlan, allowHierarchyRelaxation = true): void {
-    routeGridPlan(plan, this.routePlanState, allowHierarchyRelaxation);
+    const result = this.result;
+    const routingContext = this.routingContext;
+    const searchWorkspace = this.searchWorkspace;
+    const endpointOverlayScratch = this.endpointOverlayScratch;
+    const demandCoords = this.prepared.demandCoords;
+    const ownerSideCounts = this.ownerSideCounts;
+    const selfLoopCounts = this.selfLoopCounts;
+    const pairRoutes = this.pairRoutes;
+    const instrumentedRoutes = this.instrumentedRoutes;
+    const metrics = this.metrics;
+    const options = this.options;
+    const eligibleIds = this.prepared.eligibleIds;
+    const endpointCandidatesByEdge = this.prepared.endpointCandidatesByEdge;
+    const compatibilityFastRoutes = this.modes.compatibilityFastRoutes;
+    const sparseHierarchyIds = this.modes.sparseHierarchyIds;
+    const sparseLcaIds = this.modes.sparseLcaIds;
+    const edge = plan.edge;
+    const sourceNode = edge.start ? result.forest.nodeById.get(edge.start) : undefined;
+    const targetNode = edge.end ? result.forest.nodeById.get(edge.end) : undefined;
+    if (!sourceNode || !targetNode) {
+      throw gridError('GRID_MISSING_ENDPOINT', `Missing endpoint for edge "${edge.id}"`, {
+        edgeId: edge.id,
+      });
+    }
+
+    if (sourceNode.id === targetNode.id) {
+      const committedPairRoutes = pairRoutes.get(plan.pairKey) ?? [];
+      const { points, side, index } = sparseSelfLoopRoute(
+        plan,
+        sourceNode,
+        result,
+        routingContext,
+        searchWorkspace,
+        endpointOverlayScratch.get(sourceNode.parentId ?? ROOT_CONTAINER_ID),
+        ownerSideCounts,
+        selfLoopCounts,
+        committedPairRoutes,
+        options
+      );
+      const countKey = `${sourceNode.id}:${side}`;
+      selfLoopCounts.set(countKey, index + 1);
+      edge.points = points;
+      edge.curve = result.config.curve;
+      edge.cornerRadius = result.config.edgeCornerRadius;
+      committedPairRoutes.push(points);
+      pairRoutes.set(plan.pairKey, committedPairRoutes);
+      if (metrics && instrumentedRoutes) {
+        recordGridRoute(metrics, edge.id, points, instrumentedRoutes, 0, plan.laneOffset);
+        instrumentedRoutes.push(points);
+      }
+      return;
+    }
+
+    const sourceFinal = plan.source.chain[plan.source.chain.length - 1];
+    const targetFinal = plan.target.chain[plan.target.chain.length - 1];
+    const useSparseLca = sparseLcaIds.has(edge.id);
+    const lcaStart: SegmentAttachment = useSparseLca
+      ? plan.source.finalKind === 'boundary'
+        ? groupBoundaryEndpointAttachment(
+            sourceFinal.ownerId,
+            sourceFinal.side,
+            sourceFinal.demandKey,
+            result,
+            demandCoords
+          )
+        : plan.source.chain.length > 1
+          ? portalAttachment(this.pairedPortal(sourceFinal), false)
+          : this.itemSegmentAttachment(sourceFinal, plan.lcaContainerId)
+      : {
+          ownerId: sourceFinal.ownerId,
+          ...(plan.source.finalKind === 'boundary'
+            ? boundaryAttachment(
+                plan.lcaContainerId,
+                sourceFinal.side,
+                sourceFinal.demandKey,
+                result,
+                demandCoords
+              )
+            : itemAttachment(
+                sourceFinal.ownerId,
+                sourceFinal.side,
+                sourceFinal.demandKey,
+                plan.lcaContainerId,
+                result,
+                demandCoords
+              )),
+        };
+    const lcaEnd: SegmentAttachment = useSparseLca
+      ? plan.target.finalKind === 'boundary'
+        ? groupBoundaryEndpointAttachment(
+            targetFinal.ownerId,
+            targetFinal.side,
+            targetFinal.demandKey,
+            result,
+            demandCoords
+          )
+        : plan.target.chain.length > 1
+          ? portalAttachment(this.pairedPortal(targetFinal), false)
+          : this.itemSegmentAttachment(targetFinal, plan.lcaContainerId)
+      : {
+          ownerId: targetFinal.ownerId,
+          ...(plan.target.finalKind === 'boundary'
+            ? boundaryAttachment(
+                plan.lcaContainerId,
+                targetFinal.side,
+                targetFinal.demandKey,
+                result,
+                demandCoords
+              )
+            : itemAttachment(
+                targetFinal.ownerId,
+                targetFinal.side,
+                targetFinal.demandKey,
+                plan.lcaContainerId,
+                result,
+                demandCoords
+              )),
+        };
+    let legacyLcaPoints: Point[] | undefined;
+    const legacyRoute = () =>
+      (legacyLcaPoints ??= routeWithinContainer(
+        plan.lcaContainerId,
+        result,
+        lcaStart,
+        lcaEnd,
+        plan.laneIndex
+      ));
+    const compatibilityFastRoute = compatibilityFastRoutes.get(edge.id);
+    const lcaPoints = compatibilityFastRoute
+      ? (() => {
+          if (metrics) {
+            metrics.compatibilityFastPaths++;
+          }
+          return compatibilityFastRoute;
+        })()
+      : eligibleIds.has(edge.id)
+        ? sparseSameContainerRoute(
+            plan,
+            endpointCandidatesByEdge.get(edge.id)!.sources,
+            endpointCandidatesByEdge.get(edge.id)!.targets,
+            sourceNode,
+            targetNode,
+            legacyRoute,
+            result,
+            routingContext,
+            searchWorkspace,
+            endpointOverlayScratch.get(plan.lcaContainerId)!,
+            options,
+            pairRoutes.get(plan.pairKey) ?? []
+          )
+        : useSparseLca
+          ? sparseContainerSegment(
+              edge.id,
+              plan.lcaContainerId,
+              lcaStart,
+              lcaEnd,
+              legacyRoute,
+              result,
+              routingContext,
+              searchWorkspace,
+              endpointOverlayScratch.get(plan.lcaContainerId),
+              options,
+              pairRoutes.get(plan.pairKey) ?? [],
+              () =>
+                plan.target.finalKind === 'item' && plan.target.chain.length > 1
+                  ? this.alternativePairedPortals(targetFinal, false)
+                  : [],
+              () =>
+                plan.source.finalKind === 'item' && plan.source.chain.length > 1
+                  ? this.alternativePairedPortals(sourceFinal, false)
+                  : [],
+              plan.bundleSize > 1
+            )
+          : validatedCompatibilitySegment(
+              edge.id,
+              plan.lcaContainerId,
+              lcaStart,
+              lcaEnd,
+              legacyRoute,
+              result,
+              metrics
+            );
+
+    const routeHierarchyChain = (endpoint: EdgeEndpointPlan, chains: Point[][]): void => {
+      for (let index = 0; index < endpoint.chain.length - 1; index++) {
+        const from = endpoint.chain[index];
+        const to = endpoint.chain[index + 1];
+        if (!sparseHierarchyIds.has(edge.id)) {
+          const start: SegmentAttachment = {
+            ownerId: from.ownerId,
+            ...itemAttachment(
+              from.ownerId,
+              from.side,
+              from.demandKey,
+              to.ownerId,
+              result,
+              demandCoords
+            ),
+          };
+          const end: SegmentAttachment = {
+            ownerId: to.ownerId,
+            ...boundaryAttachment(to.ownerId, to.side, to.demandKey, result, demandCoords),
+          };
+          chains.push(
+            validatedCompatibilitySegment(
+              edge.id,
+              to.ownerId,
+              start,
+              end,
+              () => routeWithinContainer(to.ownerId, result, start, end, plan.laneIndex),
+              result,
+              metrics
+            )
+          );
+          continue;
+        }
+        const start =
+          index === 0
+            ? this.itemSegmentAttachment(from, to.ownerId)
+            : portalAttachment(this.pairedPortal(from), false);
+        const end = portalAttachment(this.pairedPortal(to), true);
+        chains.push(
+          sparseContainerSegment(
+            edge.id,
+            to.ownerId,
+            start,
+            end,
+            () => routeWithinContainer(to.ownerId, result, start, end, plan.laneIndex),
+            result,
+            routingContext,
+            searchWorkspace,
+            endpointOverlayScratch.get(to.ownerId),
+            options,
+            pairRoutes.get(plan.pairKey) ?? [],
+            () => this.alternativePairedPortals(to),
+            () => (index === 0 ? this.alternativeItemAttachments(plan, from, to.ownerId) : []),
+            plan.bundleSize > 1
+          )
+        );
+      }
+    };
+    const sourceChains: Point[][] = [];
+    const targetChains: Point[][] = [];
+    routeHierarchyChain(plan.source, sourceChains);
+    routeHierarchyChain(plan.target, targetChains);
+
+    const points = combinePointChains([
+      ...sourceChains,
+      lcaPoints,
+      ...targetChains.reverse().map((chain) => reversePoints(chain)),
+    ]);
+    const committedPairRoutes = pairRoutes.get(plan.pairKey) ?? [];
+    const satisfiesPairConstraints = routeSatisfiesPairConstraints(points, committedPairRoutes);
+    const relaxHierarchySeparation =
+      !satisfiesPairConstraints &&
+      plan.bundleSize > 1 &&
+      plan.source.chain.length + plan.target.chain.length > 2 &&
+      routeHasDistinctPairPorts(points, committedPairRoutes);
+    if (
+      plan.bundleSize > 1 &&
+      !satisfiesPairConstraints &&
+      (!relaxHierarchySeparation || !allowHierarchyRelaxation)
+    ) {
+      if (metrics) {
+        metrics.routesImpossible++;
+      }
+      throw gridError('GRID_ROUTE_NOT_FOUND', `No distinct lane route for "${edge.id}"`, {
+        edgeId: edge.id,
+        reason: relaxHierarchySeparation ? 'pair-separation' : 'no-distinct-route',
+      });
+    }
+    if (relaxHierarchySeparation && metrics) {
+      metrics.bundleSeparationRelaxations++;
+    }
+    edge.points = points;
+    edge.curve = result.config.curve;
+    edge.cornerRadius = result.config.edgeCornerRadius;
+    committedPairRoutes.push(points);
+    pairRoutes.set(plan.pairKey, committedPairRoutes);
+    if (metrics && instrumentedRoutes) {
+      const boundaryTransitionCount = plan.source.chain.length + plan.target.chain.length - 2;
+      recordGridRoute(
+        metrics,
+        edge.id,
+        points,
+        instrumentedRoutes,
+        boundaryTransitionCount,
+        plan.laneOffset
+      );
+      instrumentedRoutes.push(points);
+    }
   }
 
   private createBundleCheckpoint(pairPlans: readonly EdgeRoutePlan[]): BundleCheckpoint {
