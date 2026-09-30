@@ -2028,7 +2028,6 @@ export function positionGridEdgeLabels(
   if (labelledEdges.length === 0) {
     return;
   }
-  instrumentation ??= createGridEdgeLabelInstrumentation();
 
   const baseEdgePoints = new Map<string, Point[] | undefined>(
     data.edges.map((edge) => [edge.id, edge.points?.map((point) => ({ ...point }))])
