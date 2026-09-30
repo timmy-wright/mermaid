@@ -622,15 +622,15 @@ export const insertEdge = function (
     edgeClassStyles.push(edge.cssCompiledStyles[key]);
   }
 
+  // Apply exactly one endpoint-clipping policy; running generic clipping after a specialized
+  // policy would clip the rewritten points again and destroy router-owned geometry.
   if (edge.portClipping === 'outline-orthogonal' && !skipIntersect) {
     points = clipOrthogonalEndpointsToNodeOutlines(points, tail, head);
-  }
-
-  // Edge endpoint clipping. The swimlanes layout produces orthogonal edges whose
-  // axis-aligned entry/exit segments must be preserved, so it uses a dedicated
-  // boundary-clipping path. Every other layout (dagre, ELK, …) keeps the original
-  // clipping below, so their edge ports are unaffected by swimlanes.
-  if (layout === 'swimlane') {
+  } else if (layout === 'swimlane') {
+    // Edge endpoint clipping. The swimlanes layout produces orthogonal edges whose
+    // axis-aligned entry/exit segments must be preserved, so it uses a dedicated
+    // boundary-clipping path. Every other layout (dagre, ELK, …) keeps the original
+    // clipping below, so their edge ports are unaffected by swimlanes.
     if (head.intersect && tail.intersect && Array.isArray(points) && points.length >= 2) {
       if (points.length === 2) {
         // Simple straight edge: just clip the two endpoints to the node boundaries.
