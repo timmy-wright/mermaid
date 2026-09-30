@@ -2388,6 +2388,42 @@ function sparseContainerSegment(
   );
 }
 
+/*
+ * TODO: Break `routeGridEdges()` into a private routing session with explicit phases and
+ * transactional bundle retries.
+ *
+ * The function currently owns the complete routing invocation: plan collection and ordering,
+ * endpoint allocation, compatibility fast-path selection, sparse-routing state, hierarchy portal
+ * selection, routing each plan, committing routes, and retrying bundles. Those phases communicate
+ * through several mutable maps and arrays captured by nested closures, including demand
+ * coordinates, paired portals, pair routes, loop and side counts, instrumentation routes, search
+ * workspace, and topology overlay scratch storage. Keeping that state in one function makes the
+ * ordering dependencies hard to review and makes rollback correctness depend on every closure
+ * knowing which structures it mutates.
+ *
+ * A production-quality refactor should introduce a private `GridEdgeRoutingSession` class, or an
+ * equivalent module with an explicit `RoutingSession` state object, and separate these operations:
+ *
+ * 1. Collect and deterministically order plans, endpoint demands, and endpoint candidates.
+ * 2. Prepare and validate corridor fast-path routes.
+ * 3. Route one plan, including self-loops, LCA segments, hierarchy chains, and portal alternatives.
+ * 4. Route a bundle as a transaction: initial order, deterministic retry order, then the documented
+ *    hierarchy-separation relaxation.
+ * 5. Commit or restore all route, portal, demand, pair, edge, and instrumentation state.
+ *
+ * Bundle rollback should move behind named `createBundleCheckpoint()` and
+ * `restoreBundleCheckpoint()` operations. Do not implement this by blindly cloning and restoring
+ * the complete instrumentation object. Metrics describing committed output, such as route totals
+ * and selected portals, must be rolled back, while metrics describing work performed, such as
+ * searches, expanded states, fallback attempts, and retry attempts, must survive a failed attempt.
+ * Centralize that distinction in a typed checkpoint in `routerInstrumentation.ts` so adding a new
+ * metric requires an explicit decision about whether it is transactional or cumulative.
+ *
+ * Perform the extraction incrementally and without changing route selection: first isolate the
+ * checkpoint, then plan preparation, then single-plan routing, and finally move the remaining
+ * session state. After each step, verify deterministic geometry and ordering, hierarchy and bundle
+ * retries, resource fallbacks, and instrumentation totals.
+ */
 export function routeGridEdges(
   layout: LayoutData,
   result: GridLayoutResult,
