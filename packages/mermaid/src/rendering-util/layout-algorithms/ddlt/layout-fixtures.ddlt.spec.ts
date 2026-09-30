@@ -55,6 +55,7 @@ describe('DDLT layout-test fixture sweep', () => {
         'grid/routing-outside-member',
         'grid/routing-loops-parallel-lr',
         'grid/routing-cell-aware-empty-cell',
+        'grid/routing-hierarchy-portals',
       ])
     );
 

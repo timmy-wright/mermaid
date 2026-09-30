@@ -37,6 +37,28 @@ describe('domus/core/helpers', () => {
           { x: 20, y: 10 },
           { x: 0, y: 10 },
         ],
+        'start',
+        12,
+        7
+      )
+    ).toMatchObject({ left: 8, right: 20, top: 3, bottom: 17 });
+    expect(
+      terminalMarkerClearanceRect(
+        [
+          { x: 10, y: 20 },
+          { x: 10, y: 0 },
+        ],
+        'start',
+        12,
+        7
+      )
+    ).toMatchObject({ left: 3, right: 17, top: 8, bottom: 20 });
+    expect(
+      terminalMarkerClearanceRect(
+        [
+          { x: 20, y: 10 },
+          { x: 0, y: 10 },
+        ],
         'end',
         12,
         7

@@ -76,9 +76,6 @@ describe('grid placement', () => {
       }),
     } as LayoutData);
 
-    const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
-    debug.mockRestore();
-
     const { placements, cells } = resolveGridPlacements(items, sourceOrder, gridConfig);
     const byId = new Map(placements.map((placement) => [placement.item.id, placement]));
 
