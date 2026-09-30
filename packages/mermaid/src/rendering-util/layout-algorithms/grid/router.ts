@@ -1867,7 +1867,16 @@ function sparseSameContainerRoute(
       const sourceId = overlay.pointVertexIds.get(routingPointKey(sourceCandidate.connect));
       const targetId = overlay.pointVertexIds.get(routingPointKey(targetCandidate.connect));
       if (sourceId === undefined || targetId === undefined) {
-        throw new Error('Endpoint projection is missing from the routing overlay');
+        throw gridError(
+          'GRID_ROUTE_NOT_FOUND',
+          `Endpoint projection is missing from the routing overlay for "${plan.edge.id}"`,
+          {
+            edgeId: plan.edge.id,
+            containerId: plan.lcaContainerId,
+            source: sourceCandidate.connect,
+            target: targetCandidate.connect,
+          }
+        );
       }
       const sourceOrientation: GridOrientation =
         sourceCandidate.side === 'left' || sourceCandidate.side === 'right' ? 'H' : 'V';
@@ -2086,7 +2095,17 @@ function sparseSelfLoopRoute(
       const sourceId = overlay.pointVertexIds.get(routingPointKey(start.connect));
       const targetId = overlay.pointVertexIds.get(routingPointKey(target.connect));
       if (sourceId === undefined || targetId === undefined) {
-        throw new Error('Self-loop endpoint projection is missing from the routing overlay');
+        throw gridError(
+          'GRID_ROUTE_NOT_FOUND',
+          `Self-loop endpoint projection is missing from the routing overlay for "${plan.edge.id}"`,
+          {
+            edgeId: plan.edge.id,
+            containerId,
+            source: start.connect,
+            target: target.connect,
+            side,
+          }
+        );
       }
       const orientation: GridOrientation = side === 'left' || side === 'right' ? 'H' : 'V';
       const route = findShortestRoute(overlay, sourceId, targetId, {
