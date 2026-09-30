@@ -1,7 +1,7 @@
 import { log } from '../../../logger.js';
 import type { Point } from '../../../types.js';
 import type { Edge, LayoutData, Node } from '../../types.js';
-import { EPS, normalizePolyline } from '../layout-utils/geometry.js';
+import { PIXEL_EPSILON, normalizePolyline } from '../layout-utils/geometry.js';
 import { compareCodeUnits, polylineIntersectsRect, rectForNode } from '../layout-utils/helpers.js';
 import type { Rect } from '../layout-utils/types.js';
 import { isAncestorGroup } from './groups.js';
@@ -436,7 +436,9 @@ function assignDemandCoordinates(
             Math.abs(coordinate - clamped) < Math.abs(best - clamped) ? coordinate : best,
           corridorCoordinates[0]
         );
-        return nearest !== undefined && Math.abs(nearest - clamped) <= EPS ? nearest : clamped;
+        return nearest !== undefined && Math.abs(nearest - clamped) <= PIXEL_EPSILON
+          ? nearest
+          : clamped;
       };
       if (demands.length === 1) {
         assigned.set(demands[0].demandKey, preferredCoordinate(demands[0]));

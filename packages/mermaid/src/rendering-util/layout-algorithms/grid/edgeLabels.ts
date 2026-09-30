@@ -19,7 +19,7 @@ const MAX_GUTTER_STEPS = 16;
 const MAX_DETOUR_LINE_CANDIDATES = 128;
 const MAX_DETOUR_CENTER_CANDIDATES = 64;
 const EDGE_END_MARKER_CLEARANCE = 12;
-const EPS = 1e-6;
+const LABEL_EPSILON = 1e-6;
 
 interface Interval {
   start: number;
@@ -335,7 +335,7 @@ function markerClearanceRectsFromPoints(points: Point[]): Rect[] {
         which as 'start' | 'end',
         EDGE_END_MARKER_CLEARANCE,
         7,
-        EPS
+        LABEL_EPSILON
       )
     )
     .filter((rect): rect is Rect => rect !== null);
@@ -409,14 +409,14 @@ function markerClearanceRectsForEdge(
 function rangeOverlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
   return (
     Math.max(Math.min(aStart, aEnd), Math.min(bStart, bEnd)) <
-    Math.min(Math.max(aStart, aEnd), Math.max(bStart, bEnd)) - EPS
+    Math.min(Math.max(aStart, aEnd), Math.max(bStart, bEnd)) - LABEL_EPSILON
   );
 }
 
 function clampInterval(interval: Interval, low: number, high: number): Interval | null {
   const start = Math.max(low, Math.min(interval.start, interval.end));
   const end = Math.min(high, Math.max(interval.start, interval.end));
-  return end - start > EPS ? { start, end } : null;
+  return end - start > LABEL_EPSILON ? { start, end } : null;
 }
 
 function mergeIntervals(intervals: Interval[], low: number, high: number): Interval[] {
@@ -433,7 +433,7 @@ function mergeIntervals(intervals: Interval[], low: number, high: number): Inter
   for (let index = 1; index < clamped.length; index++) {
     const current = clamped[index];
     const previous = merged[merged.length - 1];
-    if (current.start <= previous.end + EPS) {
+    if (current.start <= previous.end + LABEL_EPSILON) {
       previous.end = Math.max(previous.end, current.end);
     } else {
       merged.push(current);
@@ -448,19 +448,19 @@ function centerCandidatesFromIntervals(
   blocked: Interval[],
   preferred: number
 ): number[] {
-  if (high - low <= EPS) {
+  if (high - low <= LABEL_EPSILON) {
     return [];
   }
 
   const allowed: Interval[] = [];
   let cursor = low;
   for (const interval of mergeIntervals(blocked, low, high)) {
-    if (interval.start - cursor > EPS) {
+    if (interval.start - cursor > LABEL_EPSILON) {
       allowed.push({ start: cursor, end: interval.start });
     }
     cursor = Math.max(cursor, interval.end);
   }
-  if (high - cursor > EPS) {
+  if (high - cursor > LABEL_EPSILON) {
     allowed.push({ start: cursor, end: high });
   }
 
@@ -471,11 +471,11 @@ function centerCandidatesFromIntervals(
   }));
   candidates.sort((a, b) => {
     const preferredDelta = Math.abs(a.value - preferred) - Math.abs(b.value - preferred);
-    if (Math.abs(preferredDelta) > EPS) {
+    if (Math.abs(preferredDelta) > LABEL_EPSILON) {
       return preferredDelta;
     }
     const widthDelta = b.end - b.start - (a.end - a.start);
-    if (Math.abs(widthDelta) > EPS) {
+    if (Math.abs(widthDelta) > LABEL_EPSILON) {
       return widthDelta;
     }
     return a.value - b.value;
@@ -864,7 +864,7 @@ function blockedCenterIntervals(
     segment.orientation === 'H'
       ? Math.max(segment.a.x, segment.b.x) - alongHalf
       : Math.max(segment.a.y, segment.b.y) - alongHalf;
-  if (high - low <= EPS) {
+  if (high - low <= LABEL_EPSILON) {
     return null;
   }
 
@@ -1125,7 +1125,7 @@ function uniqueSortedCandidates(values: number[], anchor: number): number[] {
   }
   return [...rounded.values()].sort((a, b) => {
     const distanceDelta = Math.abs(a - anchor) - Math.abs(b - anchor);
-    if (Math.abs(distanceDelta) > EPS) {
+    if (Math.abs(distanceDelta) > LABEL_EPSILON) {
       return distanceDelta;
     }
     return a - b;
@@ -1312,12 +1312,12 @@ function buildLabelDetourPoints(
     const x2 = centerAlong + span / 2;
     const minX = Math.min(a.x, b.x);
     const maxX = Math.max(a.x, b.x);
-    const extendsBeforeStart = x1 < minX - EPS;
-    const extendsAfterEnd = x2 > maxX + EPS;
+    const extendsBeforeStart = x1 < minX - LABEL_EPSILON;
+    const extendsAfterEnd = x2 > maxX + LABEL_EPSILON;
     const xDirection = b.x >= a.x ? 1 : -1;
     const segmentInset = Math.max(
       0,
-      Math.min(EDGE_END_MARKER_CLEARANCE, Math.abs(b.x - a.x) / 2 - EPS)
+      Math.min(EDGE_END_MARKER_CLEARANCE, Math.abs(b.x - a.x) / 2 - LABEL_EPSILON)
     );
     const entryX = a.x + xDirection * segmentInset;
     const exitX = b.x - xDirection * segmentInset;
@@ -1365,12 +1365,12 @@ function buildLabelDetourPoints(
   const y2 = centerAlong + span / 2;
   const minY = Math.min(a.y, b.y);
   const maxY = Math.max(a.y, b.y);
-  const extendsBeforeStart = y1 < minY - EPS;
-  const extendsAfterEnd = y2 > maxY + EPS;
+  const extendsBeforeStart = y1 < minY - LABEL_EPSILON;
+  const extendsAfterEnd = y2 > maxY + LABEL_EPSILON;
   const yDirection = b.y >= a.y ? 1 : -1;
   const segmentInset = Math.max(
     0,
-    Math.min(EDGE_END_MARKER_CLEARANCE, Math.abs(b.y - a.y) / 2 - EPS)
+    Math.min(EDGE_END_MARKER_CLEARANCE, Math.abs(b.y - a.y) / 2 - LABEL_EPSILON)
   );
   const entryY = a.y + yDirection * segmentInset;
   const exitY = b.y - yDirection * segmentInset;
@@ -1434,7 +1434,7 @@ function buildExtendedLabelDetourPoints(
     const xDirection = b.x >= a.x ? 1 : -1;
     const segmentInset = Math.max(
       0,
-      Math.min(EDGE_END_MARKER_CLEARANCE, Math.abs(b.x - a.x) / 2 - EPS)
+      Math.min(EDGE_END_MARKER_CLEARANCE, Math.abs(b.x - a.x) / 2 - LABEL_EPSILON)
     );
     const entryX = a.x + xDirection * segmentInset;
     const exitX = b.x - xDirection * segmentInset;
@@ -1460,7 +1460,7 @@ function buildExtendedLabelDetourPoints(
   const yDirection = b.y >= a.y ? 1 : -1;
   const segmentInset = Math.max(
     0,
-    Math.min(EDGE_END_MARKER_CLEARANCE, Math.abs(b.y - a.y) / 2 - EPS)
+    Math.min(EDGE_END_MARKER_CLEARANCE, Math.abs(b.y - a.y) / 2 - LABEL_EPSILON)
   );
   const entryY = a.y + yDirection * segmentInset;
   const exitY = b.y - yDirection * segmentInset;
@@ -1534,7 +1534,7 @@ function reducesBlockedIntersections(
   const score = blockedIntersectionScore(candidate, blockedRect);
   return (
     score.count < baseline.count ||
-    (score.count === baseline.count && score.length < baseline.length - EPS)
+    (score.count === baseline.count && score.length < baseline.length - LABEL_EPSILON)
   );
 }
 
@@ -1568,7 +1568,7 @@ function rerouteSegmentAroundRect(
     const maxX = Math.max(a.x, b.x);
     const entry = Math.max(minX, blockedRect.left - LABEL_CLEARANCE);
     const exit = Math.min(maxX, blockedRect.right + LABEL_CLEARANCE);
-    if (exit - entry <= EPS) {
+    if (exit - entry <= LABEL_EPSILON) {
       incrementMetric(context.metrics, 'rerouteRejectedDegenerateSpan');
       return null;
     }
@@ -1612,7 +1612,7 @@ function rerouteSegmentAroundRect(
   const maxY = Math.max(a.y, b.y);
   const entry = Math.max(minY, blockedRect.top - LABEL_CLEARANCE);
   const exit = Math.min(maxY, blockedRect.bottom + LABEL_CLEARANCE);
-  if (exit - entry <= EPS) {
+  if (exit - entry <= LABEL_EPSILON) {
     incrementMetric(context.metrics, 'rerouteRejectedDegenerateSpan');
     return null;
   }
@@ -2074,7 +2074,7 @@ export function positionGridEdgeLabels(
       for (const { edge, labelNode } of workItems) {
         const segments = [...candidateSegments(edge, context)].sort((a, b) => {
           const lengthDelta = segmentLength(b.segment) - segmentLength(a.segment);
-          if (Math.abs(lengthDelta) > EPS) {
+          if (Math.abs(lengthDelta) > LABEL_EPSILON) {
             return lengthDelta;
           }
           return a.order - b.order;

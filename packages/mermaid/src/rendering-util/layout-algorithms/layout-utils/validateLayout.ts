@@ -11,7 +11,7 @@ import {
 import type { Point, Rect } from './types.js';
 
 type PortSide = 'N' | 'E' | 'S' | 'W';
-import { EPS, normalizePolyline, distance, segmentsCross } from './geometry.js';
+import { PIXEL_EPSILON, normalizePolyline, distance, segmentsCross } from './geometry.js';
 import type { Segment, NormalizedPolyline } from './geometry.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -197,13 +197,13 @@ function isSwimlaneGroup(node: Node | undefined): boolean {
 function direction(a: Point, b: Point): 'E' | 'W' | 'N' | 'S' | null {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
-  if (Math.abs(dx) <= EPS && Math.abs(dy) <= EPS) {
+  if (Math.abs(dx) <= PIXEL_EPSILON && Math.abs(dy) <= PIXEL_EPSILON) {
     return null;
   }
-  if (Math.abs(dy) <= EPS) {
+  if (Math.abs(dy) <= PIXEL_EPSILON) {
     return dx > 0 ? 'E' : 'W';
   }
-  if (Math.abs(dx) <= EPS) {
+  if (Math.abs(dx) <= PIXEL_EPSILON) {
     return dy > 0 ? 'S' : 'N';
   }
   return null;
@@ -233,14 +233,14 @@ function collinearOverlap(s1: Segment, s2: Segment): number {
     return 0;
   }
   if (s1.orientation === 'H') {
-    // Both horizontal: check if same y (within EPS)
-    if (Math.abs(s1.a.y - s2.a.y) > EPS) {
+    // Both horizontal: check if same y (within PIXEL_EPSILON)
+    if (Math.abs(s1.a.y - s2.a.y) > PIXEL_EPSILON) {
       return 0;
     }
     return rangeOverlap(s1.a.x, s1.b.x, s2.a.x, s2.b.x);
   } else {
-    // Both vertical: check if same x (within EPS)
-    if (Math.abs(s1.a.x - s2.a.x) > EPS) {
+    // Both vertical: check if same x (within PIXEL_EPSILON)
+    if (Math.abs(s1.a.x - s2.a.x) > PIXEL_EPSILON) {
       return 0;
     }
     return rangeOverlap(s1.a.y, s1.b.y, s2.a.y, s2.b.y);
@@ -522,11 +522,11 @@ function nearEndpointBandDistance(seg: Segment, side: PortSide, rect: Rect): num
     }
     const x = seg.a.x;
     const distanceToSide = side === 'W' ? rect.left - x : x - rect.right;
-    if (distanceToSide < -EPS || distanceToSide > EPS_ENDPOINT_BAND + EPS) {
+    if (distanceToSide < -PIXEL_EPSILON || distanceToSide > EPS_ENDPOINT_BAND + PIXEL_EPSILON) {
       return null;
     }
     const overlap = rangeOverlap(seg.a.y, seg.b.y, rect.top, rect.bottom);
-    return overlap > EPS ? Math.max(0, distanceToSide) : null;
+    return overlap > PIXEL_EPSILON ? Math.max(0, distanceToSide) : null;
   }
 
   if (seg.orientation !== 'H') {
@@ -534,11 +534,11 @@ function nearEndpointBandDistance(seg: Segment, side: PortSide, rect: Rect): num
   }
   const y = seg.a.y;
   const distanceToSide = side === 'N' ? rect.top - y : y - rect.bottom;
-  if (distanceToSide < -EPS || distanceToSide > EPS_ENDPOINT_BAND + EPS) {
+  if (distanceToSide < -PIXEL_EPSILON || distanceToSide > EPS_ENDPOINT_BAND + PIXEL_EPSILON) {
     return null;
   }
   const overlap = rangeOverlap(seg.a.x, seg.b.x, rect.left, rect.right);
-  return overlap > EPS ? Math.max(0, distanceToSide) : null;
+  return overlap > PIXEL_EPSILON ? Math.max(0, distanceToSide) : null;
 }
 
 /**
@@ -863,8 +863,9 @@ export function validateLayout(layout: LayoutData): ValidateLayoutResult {
     for (const [groupId, titleRect] of groupTitleRects) {
       const hit = firstInteriorRectHit(points, titleRect, startAttach, endAttach, (a, b) => {
         const touchesStartAttach =
-          distance(a, startAttach) <= EPS || distance(b, startAttach) <= EPS;
-        const touchesEndAttach = distance(a, endAttach) <= EPS || distance(b, endAttach) <= EPS;
+          distance(a, startAttach) <= PIXEL_EPSILON || distance(b, startAttach) <= PIXEL_EPSILON;
+        const touchesEndAttach =
+          distance(a, endAttach) <= PIXEL_EPSILON || distance(b, endAttach) <= PIXEL_EPSILON;
         return (
           (touchesStartAttach && sNode ? isAncestorGroup(groupId, sNode, byId) : false) ||
           (touchesEndAttach && tNode ? isAncestorGroup(groupId, tNode, byId) : false)
@@ -1109,7 +1110,7 @@ export function validateLayout(layout: LayoutData): ValidateLayoutResult {
             terminal,
             EPS_MARKER_CLEARANCE_LENGTH,
             EPS_MARKER_CLEARANCE_HALF_WIDTH,
-            EPS
+            PIXEL_EPSILON
           );
           const overlap = markerRect ? rectsOverlap(labelRect, markerRect) : null;
           if (overlap) {
@@ -1308,7 +1309,7 @@ export function validateLayout(layout: LayoutData): ValidateLayoutResult {
   // ─────────────────────────────────────────────────────────────────────────────
   const sortedEdges = [...edgeMetas].sort((a, b) => a.id.localeCompare(b.id));
   const segmentTouchesPoint = (seg: Segment, p: Point): boolean =>
-    distance(seg.a, p) <= EPS || distance(seg.b, p) <= EPS;
+    distance(seg.a, p) <= PIXEL_EPSILON || distance(seg.b, p) <= PIXEL_EPSILON;
   const isTerminalSegmentForNode = (em: EdgeMeta, seg: Segment, nodeId: string): boolean => {
     if (em.startId === nodeId && segmentTouchesPoint(seg, em.normalized.points[0])) {
       return true;
@@ -1364,7 +1365,7 @@ export function validateLayout(layout: LayoutData): ValidateLayoutResult {
           if (
             projectedOverlap >= L_MIN_SHARED &&
             gap != null &&
-            gap > EPS &&
+            gap > PIXEL_EPSILON &&
             gap < EPS_PARALLEL_EDGE_GAP
           ) {
             const allInCorridor =
