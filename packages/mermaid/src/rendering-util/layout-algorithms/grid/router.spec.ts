@@ -674,6 +674,14 @@ describe('grid router', () => {
       expect(metrics.resourceLimitFallbacks).toBe(1);
       expect(metrics.fallbackReasons[reason]).toBe(1);
       expect(metrics.fallbackValidationFailures).toBe(0);
+      expect(metrics.routeOrder).toEqual(['a-b']);
+      expect(metrics.routes).toHaveLength(1);
+      expect(metrics.routesFound).toBe(1);
+      expect(metrics.routesImpossible).toBe(0);
+      expect(metrics.routeLength).toBe(metrics.routes[0].routeLength);
+      expect(metrics.bendCount).toBe(metrics.routes[0].bendCount);
+      expect(metrics.crossingCount).toBe(metrics.routes[0].crossingCount);
+      expect(metrics.sharedLength).toBe(metrics.routes[0].sharedLength);
     }
   );
 
@@ -692,6 +700,13 @@ describe('grid router', () => {
     // and that fallback validation, rather than an unrelated routing failure, blocked the commit.
     expect(metrics.resourceLimitFallbacks).toBe(1);
     expect(metrics.fallbackValidationFailures).toBe(1);
+    expect(metrics.routeOrder).toEqual([]);
+    expect(metrics.routes).toEqual([]);
+    expect(metrics.routesFound).toBe(0);
+    expect(metrics.routeLength).toBe(0);
+    expect(metrics.bendCount).toBe(0);
+    expect(metrics.crossingCount).toBe(0);
+    expect(metrics.sharedLength).toBe(0);
   });
 
   it('validates resource-cap fallback for every hierarchy segment', () => {
@@ -812,20 +827,80 @@ describe('grid router', () => {
   });
 
   it('routes hierarchy bundles when strict separation cannot be preserved', () => {
-    const data = baseLayout(
-      [
-        group('left-group', 'Left', { row: 1, column: 1 }),
-        leaf('source', 80, 40, { row: 1, column: 1 }, 'left-group'),
-        group('right-group', 'Right', { row: 1, column: 2 }),
-        leaf('target', 80, 40, { row: 1, column: 1 }, 'right-group'),
-      ],
-      Array.from({ length: 6 }, (_, index) => edge(`edge-${index}`, 'source', 'target')),
-      { rowGap: 50, columnGap: 90 }
-    );
-    runGridLayoutCore(data);
+    const makeData = (reverseEdges = false) => {
+      const edges = Array.from({ length: 6 }, (_, index) =>
+        edge(`edge-${index}`, 'source', 'target')
+      );
+      return baseLayout(
+        [
+          group('left-group', 'Left', { row: 1, column: 1 }),
+          leaf('source', 80, 40, { row: 1, column: 1 }, 'left-group'),
+          group('right-group', 'Right', { row: 1, column: 2 }),
+          leaf('target', 80, 40, { row: 1, column: 1 }, 'right-group'),
+        ],
+        reverseEdges ? edges.reverse() : edges,
+        { rowGap: 50, columnGap: 90 }
+      );
+    };
+    const data = makeData();
+    const metrics = createGridRoutingInstrumentation();
+
+    runGridLayoutCore(data, metrics);
 
     expect(data.edges.every(({ points }) => (points?.length ?? 0) >= 2)).toBe(true);
     expect(invalidRoutingIssues(data)).toEqual([]);
+    expect(metrics).toMatchObject({
+      hierarchyPortalPairs: 12,
+      hierarchyPortalTransitionLength: 144,
+      hierarchyPortalAlternativeAttempts: 10,
+      hierarchyPortalAlternativeSelections: 4,
+      hierarchyBoundaryTransitions: 12,
+      routesFound: 6,
+      routesImpossible: 0,
+      bundleRetryAttempts: 1,
+      bundleRetrySuccesses: 0,
+      bundleSeparationRelaxations: 2,
+      routeOrder: ['edge-0', 'edge-1', 'edge-2', 'edge-3', 'edge-4', 'edge-5'],
+    });
+    expect(
+      metrics.routes.map(({ edgeId, routeOrder, laneOffset, boundaryTransitionCount }) => ({
+        edgeId,
+        routeOrder,
+        laneOffset,
+        boundaryTransitionCount,
+      }))
+    ).toEqual([
+      { edgeId: 'edge-0', routeOrder: 0, laneOffset: -20, boundaryTransitionCount: 2 },
+      { edgeId: 'edge-1', routeOrder: 1, laneOffset: -12, boundaryTransitionCount: 2 },
+      { edgeId: 'edge-2', routeOrder: 2, laneOffset: -4, boundaryTransitionCount: 2 },
+      { edgeId: 'edge-3', routeOrder: 3, laneOffset: 4, boundaryTransitionCount: 2 },
+      { edgeId: 'edge-4', routeOrder: 4, laneOffset: 12, boundaryTransitionCount: 2 },
+      { edgeId: 'edge-5', routeOrder: 5, laneOffset: 20, boundaryTransitionCount: 2 },
+    ]);
+    expect(metrics.routeLength).toBeCloseTo(
+      metrics.routes.reduce((total, route) => total + route.routeLength, 0)
+    );
+    expect(metrics.bendCount).toBe(
+      metrics.routes.reduce((total, route) => total + route.bendCount, 0)
+    );
+    expect(metrics.crossingCount).toBe(
+      metrics.routes.reduce((total, route) => total + route.crossingCount, 0)
+    );
+    expect(metrics.sharedLength).toBeCloseTo(
+      metrics.routes.reduce((total, route) => total + route.sharedLength, 0)
+    );
+
+    const reversed = makeData(true);
+    const reversedMetrics = createGridRoutingInstrumentation();
+    runGridLayoutCore(reversed, reversedMetrics);
+
+    expect(
+      Object.fromEntries(data.edges.map(({ id, points }) => [id, JSON.stringify(points)]))
+    ).toEqual(
+      Object.fromEntries(reversed.edges.map(({ id, points }) => [id, JSON.stringify(points)]))
+    );
+    expect(reversedMetrics.routeOrder).toEqual(metrics.routeOrder);
+    expect(reversedMetrics.routes).toEqual(metrics.routes);
   });
 
   it('excludes group titles and corners from same-container endpoint slots', () => {
