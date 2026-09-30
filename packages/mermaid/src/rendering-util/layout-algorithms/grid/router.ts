@@ -101,6 +101,61 @@ interface EdgeRoutePlan {
   pairKey: string;
 }
 
+interface EdgeRouteCandidates {
+  sources: EndpointCandidate[];
+  targets: EndpointCandidate[];
+}
+
+interface PreparedEdgeRoutes {
+  plans: EdgeRoutePlan[];
+  eligiblePlans: EdgeRoutePlan[];
+  eligibleIds: Set<string>;
+  orderedPlans: EdgeRoutePlan[];
+  demandCoords: Map<string, number>;
+  endpointCandidatesByEdge: Map<string, EdgeRouteCandidates>;
+  endpointIncidentCounts: Map<string, number>;
+}
+
+interface PreparedRoutingModes {
+  compatibilityFastRoutes: Map<string, Point[]>;
+  sparseHierarchyIds: Set<string>;
+  sparseLcaIds: Set<string>;
+  routedContainerIds: GridContainerId[];
+}
+
+interface RouteGridPlanContext {
+  result: GridLayoutResult;
+  routingContext: GridRoutingContext;
+  searchWorkspace: RouterSearchWorkspace;
+  endpointOverlayScratch: ReadonlyMap<GridContainerId, EndpointOverlayScratch>;
+  demandCoords: Map<string, number>;
+  ownerSideCounts: Map<string, number>;
+  selfLoopCounts: Map<string, number>;
+  pairRoutes: Map<string, Point[][]>;
+  instrumentedRoutes: Point[][] | undefined;
+  metrics: GridRoutingInstrumentation | undefined;
+  options: GridRoutingOptions;
+  eligibleIds: ReadonlySet<string>;
+  endpointCandidatesByEdge: ReadonlyMap<string, EdgeRouteCandidates>;
+  compatibilityFastRoutes: ReadonlyMap<string, Point[]>;
+  sparseHierarchyIds: ReadonlySet<string>;
+  sparseLcaIds: ReadonlySet<string>;
+  pairedPortal: (entry: EdgeEndpointEntry) => PairedPortal;
+  alternativePairedPortals: (
+    entry: EdgeEndpointEntry,
+    interior?: boolean
+  ) => SegmentAttachmentAlternative[];
+  itemSegmentAttachment: (
+    entry: EdgeEndpointEntry,
+    containerId: GridContainerId
+  ) => SegmentAttachment;
+  alternativeItemAttachments: (
+    plan: EdgeRoutePlan,
+    entry: EdgeEndpointEntry,
+    containerId: GridContainerId
+  ) => SegmentAttachmentAlternative[];
+}
+
 interface BundleEdgeCheckpoint {
   edge: Edge;
   points: Edge['points'];
@@ -2492,49 +2547,7 @@ function sparseContainerSegment(
   );
 }
 
-/*
- * TODO: Break `routeGridEdges()` into a private routing session with explicit phases and
- * transactional bundle retries.
- *
- * The function currently owns the complete routing invocation: plan collection and ordering,
- * endpoint allocation, compatibility fast-path selection, sparse-routing state, hierarchy portal
- * selection, routing each plan, committing routes, and retrying bundles. Those phases communicate
- * through several mutable maps and arrays captured by nested closures, including demand
- * coordinates, paired portals, pair routes, loop and side counts, instrumentation routes, search
- * workspace, and topology overlay scratch storage. Keeping that state in one function makes the
- * ordering dependencies hard to review and makes rollback correctness depend on every closure
- * knowing which structures it mutates.
- *
- * A production-quality refactor should introduce a private `GridEdgeRoutingSession` class, or an
- * equivalent module with an explicit `RoutingSession` state object, and separate these operations:
- *
- * 1. Collect and deterministically order plans, endpoint demands, and endpoint candidates.
- * 2. Prepare and validate corridor fast-path routes.
- * 3. Route one plan, including self-loops, LCA segments, hierarchy chains, and portal alternatives.
- * 4. Route a bundle as a transaction: initial order, deterministic retry order, then the documented
- *    hierarchy-separation relaxation.
- * 5. Commit or restore all route, portal, demand, pair, edge, and instrumentation state.
- *
- * Bundle rollback should move behind named `createBundleCheckpoint()` and
- * `restoreBundleCheckpoint()` operations. Do not implement this by blindly cloning and restoring
- * the complete instrumentation object. Metrics describing committed output, such as route totals
- * and selected portals, must be rolled back, while metrics describing work performed, such as
- * searches, expanded states, fallback attempts, and retry attempts, must survive a failed attempt.
- * Centralize that distinction in a typed checkpoint in `routerInstrumentation.ts` so adding a new
- * metric requires an explicit decision about whether it is transactional or cumulative.
- *
- * Perform the extraction incrementally and without changing route selection: first isolate the
- * checkpoint, then plan preparation, then single-plan routing, and finally move the remaining
- * session state. After each step, verify deterministic geometry and ordering, hierarchy and bundle
- * retries, resource fallbacks, and instrumentation totals.
- */
-export function routeGridEdges(
-  layout: LayoutData,
-  result: GridLayoutResult,
-  metrics?: GridRoutingInstrumentation,
-  options: GridRoutingOptions = {}
-): void {
-  rootContainerMeta(result);
+function prepareEdgeRoutes(layout: LayoutData, result: GridLayoutResult): PreparedEdgeRoutes {
   const plans = collectRoutePlans(layout, result);
   const pairCounts = new Map<string, number>();
   const endpointIncidentCounts = new Map<string, number>();
@@ -2643,8 +2656,105 @@ export function routeGridEdges(
       compareCodeUnits(a.edge.id, b.edge.id)
     );
   });
-  const demandCoords = assignDemandCoordinates(orderedPlans, result);
-  const eligibleIds = new Set(eligiblePlans.map(({ edge }) => edge.id));
+  return {
+    plans,
+    eligiblePlans,
+    eligibleIds: new Set(eligiblePlans.map(({ edge }) => edge.id)),
+    orderedPlans,
+    demandCoords: assignDemandCoordinates(orderedPlans, result),
+    endpointCandidatesByEdge,
+    endpointIncidentCounts,
+  };
+}
+
+function compatibilityLcaAttachments(
+  plan: EdgeRoutePlan,
+  result: GridLayoutResult,
+  demandCoords: Map<string, number>
+): { start: SegmentAttachment; end: SegmentAttachment } {
+  const sourceFinal = plan.source.chain.at(-1)!;
+  const targetFinal = plan.target.chain.at(-1)!;
+  const finalAttachment = (
+    endpoint: typeof plan.source,
+    final: (typeof plan.source.chain)[number]
+  ): SegmentAttachment => ({
+    ownerId: final.ownerId,
+    ...(endpoint.finalKind === 'boundary'
+      ? boundaryAttachment(plan.lcaContainerId, final.side, final.demandKey, result, demandCoords)
+      : itemAttachment(
+          final.ownerId,
+          final.side,
+          final.demandKey,
+          plan.lcaContainerId,
+          result,
+          demandCoords
+        )),
+  });
+  return {
+    start: finalAttachment(plan.source, sourceFinal),
+    end: finalAttachment(plan.target, targetFinal),
+  };
+}
+
+function compatibilityPlanIsValid(
+  plan: EdgeRoutePlan,
+  result: GridLayoutResult,
+  demandCoords: Map<string, number>
+): boolean {
+  const segmentIsValid = (
+    containerId: GridContainerId,
+    start: SegmentAttachment,
+    end: SegmentAttachment
+  ): boolean =>
+    validateContainerSegment(
+      routeWithinContainer(containerId, result, start, end, plan.laneIndex),
+      start.ownerId,
+      end.ownerId,
+      containerId,
+      result
+    );
+  for (const chain of [plan.source.chain, plan.target.chain]) {
+    for (let index = 0; index < chain.length - 1; index++) {
+      const from = chain[index];
+      const to = chain[index + 1];
+      const start: SegmentAttachment = {
+        ownerId: from.ownerId,
+        ...itemAttachment(
+          from.ownerId,
+          from.side,
+          from.demandKey,
+          to.ownerId,
+          result,
+          demandCoords
+        ),
+      };
+      const end: SegmentAttachment = {
+        ownerId: to.ownerId,
+        ...boundaryAttachment(to.ownerId, to.side, to.demandKey, result, demandCoords),
+      };
+      if (!segmentIsValid(to.ownerId, start, end)) {
+        return false;
+      }
+    }
+  }
+  const attachments = compatibilityLcaAttachments(plan, result, demandCoords);
+  return segmentIsValid(plan.lcaContainerId, attachments.start, attachments.end);
+}
+
+function prepareRoutingModes(
+  prepared: PreparedEdgeRoutes,
+  result: GridLayoutResult,
+  metrics: GridRoutingInstrumentation | undefined,
+  options: GridRoutingOptions
+): PreparedRoutingModes {
+  const {
+    plans,
+    eligiblePlans,
+    eligibleIds,
+    demandCoords,
+    endpointCandidatesByEdge,
+    endpointIncidentCounts,
+  } = prepared;
   const hasIsolatedEndpoints = (plan: EdgeRoutePlan): boolean =>
     (endpointIncidentCounts.get(plan.edge.start!) ?? 0) === plan.bundleSize &&
     (endpointIncidentCounts.get(plan.edge.end!) ?? 0) === plan.bundleSize;
@@ -2658,103 +2768,6 @@ export function routeGridEdges(
           (target.isGroup && isAncestorGroup(target.id, source, result.forest.nodeById)))
     );
   };
-  const compatibilityLcaAttachments = (
-    plan: EdgeRoutePlan
-  ): { start: SegmentAttachment; end: SegmentAttachment } => {
-    const sourceFinal = plan.source.chain.at(-1)!;
-    const targetFinal = plan.target.chain.at(-1)!;
-    const finalAttachment = (
-      endpoint: typeof plan.source,
-      final: (typeof plan.source.chain)[number]
-    ): SegmentAttachment => ({
-      ownerId: final.ownerId,
-      ...(endpoint.finalKind === 'boundary'
-        ? boundaryAttachment(plan.lcaContainerId, final.side, final.demandKey, result, demandCoords)
-        : itemAttachment(
-            final.ownerId,
-            final.side,
-            final.demandKey,
-            plan.lcaContainerId,
-            result,
-            demandCoords
-          )),
-    });
-    return {
-      start: finalAttachment(plan.source, sourceFinal),
-      end: finalAttachment(plan.target, targetFinal),
-    };
-  };
-  const compatibilityPlanIsValid = (plan: EdgeRoutePlan): boolean => {
-    const segmentIsValid = (
-      containerId: GridContainerId,
-      start: SegmentAttachment,
-      end: SegmentAttachment
-    ): boolean =>
-      validateContainerSegment(
-        routeWithinContainer(containerId, result, start, end, plan.laneIndex),
-        start.ownerId,
-        end.ownerId,
-        containerId,
-        result
-      );
-    for (const chain of [plan.source.chain, plan.target.chain]) {
-      for (let index = 0; index < chain.length - 1; index++) {
-        const from = chain[index];
-        const to = chain[index + 1];
-        const start: SegmentAttachment = {
-          ownerId: from.ownerId,
-          ...itemAttachment(
-            from.ownerId,
-            from.side,
-            from.demandKey,
-            to.ownerId,
-            result,
-            demandCoords
-          ),
-        };
-        const end: SegmentAttachment = {
-          ownerId: to.ownerId,
-          ...boundaryAttachment(to.ownerId, to.side, to.demandKey, result, demandCoords),
-        };
-        if (!segmentIsValid(to.ownerId, start, end)) {
-          return false;
-        }
-      }
-    }
-    const attachments = compatibilityLcaAttachments(plan);
-    return segmentIsValid(plan.lcaContainerId, attachments.start, attachments.end);
-  };
-
-  /*
-   * Grid routing currently uses two algorithms:
-   *
-   * - `routeWithinContainer()` is the deterministic corridor router. During normal rendering, an
-   *   ordinary unbundled same-container edge uses it as a fast path when its endpoint ports are
-   *   legal, the complete route passes measured-geometry validation, and its length equals the
-   *   Manhattan lower bound. This avoids building a visibility topology and running A* for routes
-   *   that sparse search cannot improve.
-   * - The sparse visibility router handles self-loops, bundles, ordinary routes that fail the fast
-   *   path, and hierarchy routes that need alternative portals or obstacle-aware search.
-   *
-   * Test-only topology/search caps and dual-route comparison disable the fast path intentionally:
-   * those modes must exercise sparse topology, search, and fallback behavior. Normal router and
-   * performance tests cover the production fast path separately.
-   *
-   * Hierarchy routing is still partially migrated. Bundles, routes whose two endpoints have no
-   * unrelated incident edges, and plans whose corridor route fails validation use sparse routing
-   * for every hierarchy-chain segment. Other single hierarchy edges may retain validated corridor
-   * segments when at least one endpoint is shared with another edge. Group-to-descendant routes
-   * always use sparse routing for their LCA segment, even when their ascent or descent chain still
-   * uses corridor routing. Defined sparse resource-limit failures also use the corridor route as a
-   * fallback, but only after that route passes the same geometry and pair-separation validation.
-   *
-   * Finishing the migration requires sparse routing to handle the remaining mixed-demand
-   * hierarchy segments without introducing shared subpaths or crossings, and to meet the large
-   * graph performance target without the common-edge fast path. It also requires generated nested
-   * hierarchy, label, loop, bundle, and fallback coverage plus release-level validation. Only then
-   * can `routeWithinContainer()`, corridor metadata, compatibility/fallback instrumentation, and
-   * their obsolete tests be removed.
-   */
   const compatibilityFastRoutes = new Map<string, Point[]>();
   const compatibilityFastPathEnabled =
     options.topologyCaps === undefined &&
@@ -2770,7 +2783,7 @@ export function routeGridEdges(
     if (!source || !target) {
       continue;
     }
-    const attachments = compatibilityLcaAttachments(plan);
+    const attachments = compatibilityLcaAttachments(plan, result, demandCoords);
     const route = routeWithinContainer(
       plan.lcaContainerId,
       result,
@@ -2817,7 +2830,9 @@ export function routeGridEdges(
         (plan) =>
           !eligibleIds.has(plan.edge.id) &&
           plan.edge.start !== plan.edge.end &&
-          (plan.bundleSize > 1 || hasIsolatedEndpoints(plan) || !compatibilityPlanIsValid(plan))
+          (plan.bundleSize > 1 ||
+            hasIsolatedEndpoints(plan) ||
+            !compatibilityPlanIsValid(plan, result, demandCoords))
       )
       .map(({ edge }) => edge.id)
   );
@@ -2837,6 +2852,396 @@ export function routeGridEdges(
       ...plan.source.chain.slice(1).map(({ ownerId }) => ownerId),
       ...plan.target.chain.slice(1).map(({ ownerId }) => ownerId),
     ]);
+  return {
+    compatibilityFastRoutes,
+    sparseHierarchyIds,
+    sparseLcaIds,
+    routedContainerIds,
+  };
+}
+
+function routeGridPlan(
+  plan: EdgeRoutePlan,
+  state: RouteGridPlanContext,
+  allowHierarchyRelaxation = true
+): void {
+  const {
+    result,
+    routingContext,
+    searchWorkspace,
+    endpointOverlayScratch,
+    demandCoords,
+    ownerSideCounts,
+    selfLoopCounts,
+    pairRoutes,
+    instrumentedRoutes,
+    metrics,
+    options,
+    eligibleIds,
+    endpointCandidatesByEdge,
+    compatibilityFastRoutes,
+    sparseHierarchyIds,
+    sparseLcaIds,
+    pairedPortal,
+    alternativePairedPortals,
+    itemSegmentAttachment,
+    alternativeItemAttachments,
+  } = state;
+  const edge = plan.edge;
+  const sourceNode = edge.start ? result.forest.nodeById.get(edge.start) : undefined;
+  const targetNode = edge.end ? result.forest.nodeById.get(edge.end) : undefined;
+  if (!sourceNode || !targetNode) {
+    throw gridError('GRID_MISSING_ENDPOINT', `Missing endpoint for edge "${edge.id}"`, {
+      edgeId: edge.id,
+    });
+  }
+
+  if (sourceNode.id === targetNode.id) {
+    const committedPairRoutes = pairRoutes.get(plan.pairKey) ?? [];
+    const { points, side, index } = sparseSelfLoopRoute(
+      plan,
+      sourceNode,
+      result,
+      routingContext,
+      searchWorkspace,
+      endpointOverlayScratch.get(sourceNode.parentId ?? ROOT_CONTAINER_ID),
+      ownerSideCounts,
+      selfLoopCounts,
+      committedPairRoutes,
+      options
+    );
+    const countKey = `${sourceNode.id}:${side}`;
+    selfLoopCounts.set(countKey, index + 1);
+    edge.points = points;
+    edge.curve = result.config.curve;
+    edge.cornerRadius = result.config.edgeCornerRadius;
+    committedPairRoutes.push(points);
+    pairRoutes.set(plan.pairKey, committedPairRoutes);
+    if (metrics && instrumentedRoutes) {
+      recordGridRoute(metrics, edge.id, points, instrumentedRoutes, 0, plan.laneOffset);
+      instrumentedRoutes.push(points);
+    }
+    return;
+  }
+
+  const sourceFinal = plan.source.chain[plan.source.chain.length - 1];
+  const targetFinal = plan.target.chain[plan.target.chain.length - 1];
+  const useSparseLca = sparseLcaIds.has(edge.id);
+  const lcaStart: SegmentAttachment = useSparseLca
+    ? plan.source.finalKind === 'boundary'
+      ? groupBoundaryEndpointAttachment(
+          sourceFinal.ownerId,
+          sourceFinal.side,
+          sourceFinal.demandKey,
+          result,
+          demandCoords
+        )
+      : plan.source.chain.length > 1
+        ? portalAttachment(pairedPortal(sourceFinal), false)
+        : itemSegmentAttachment(sourceFinal, plan.lcaContainerId)
+    : {
+        ownerId: sourceFinal.ownerId,
+        ...(plan.source.finalKind === 'boundary'
+          ? boundaryAttachment(
+              plan.lcaContainerId,
+              sourceFinal.side,
+              sourceFinal.demandKey,
+              result,
+              demandCoords
+            )
+          : itemAttachment(
+              sourceFinal.ownerId,
+              sourceFinal.side,
+              sourceFinal.demandKey,
+              plan.lcaContainerId,
+              result,
+              demandCoords
+            )),
+      };
+  const lcaEnd: SegmentAttachment = useSparseLca
+    ? plan.target.finalKind === 'boundary'
+      ? groupBoundaryEndpointAttachment(
+          targetFinal.ownerId,
+          targetFinal.side,
+          targetFinal.demandKey,
+          result,
+          demandCoords
+        )
+      : plan.target.chain.length > 1
+        ? portalAttachment(pairedPortal(targetFinal), false)
+        : itemSegmentAttachment(targetFinal, plan.lcaContainerId)
+    : {
+        ownerId: targetFinal.ownerId,
+        ...(plan.target.finalKind === 'boundary'
+          ? boundaryAttachment(
+              plan.lcaContainerId,
+              targetFinal.side,
+              targetFinal.demandKey,
+              result,
+              demandCoords
+            )
+          : itemAttachment(
+              targetFinal.ownerId,
+              targetFinal.side,
+              targetFinal.demandKey,
+              plan.lcaContainerId,
+              result,
+              demandCoords
+            )),
+      };
+  let legacyLcaPoints: Point[] | undefined;
+  const legacyRoute = () =>
+    (legacyLcaPoints ??= routeWithinContainer(
+      plan.lcaContainerId,
+      result,
+      lcaStart,
+      lcaEnd,
+      plan.laneIndex
+    ));
+  const compatibilityFastRoute = compatibilityFastRoutes.get(edge.id);
+  const lcaPoints = compatibilityFastRoute
+    ? (() => {
+        if (metrics) {
+          metrics.compatibilityFastPaths++;
+        }
+        return compatibilityFastRoute;
+      })()
+    : eligibleIds.has(edge.id)
+      ? sparseSameContainerRoute(
+          plan,
+          endpointCandidatesByEdge.get(edge.id)!.sources,
+          endpointCandidatesByEdge.get(edge.id)!.targets,
+          sourceNode,
+          targetNode,
+          legacyRoute,
+          result,
+          routingContext,
+          searchWorkspace,
+          endpointOverlayScratch.get(plan.lcaContainerId)!,
+          options,
+          pairRoutes.get(plan.pairKey) ?? []
+        )
+      : useSparseLca
+        ? sparseContainerSegment(
+            edge.id,
+            plan.lcaContainerId,
+            lcaStart,
+            lcaEnd,
+            legacyRoute,
+            result,
+            routingContext,
+            searchWorkspace,
+            endpointOverlayScratch.get(plan.lcaContainerId),
+            options,
+            pairRoutes.get(plan.pairKey) ?? [],
+            () =>
+              plan.target.finalKind === 'item' && plan.target.chain.length > 1
+                ? alternativePairedPortals(targetFinal, false)
+                : [],
+            () =>
+              plan.source.finalKind === 'item' && plan.source.chain.length > 1
+                ? alternativePairedPortals(sourceFinal, false)
+                : [],
+            plan.bundleSize > 1
+          )
+        : validatedCompatibilitySegment(
+            edge.id,
+            plan.lcaContainerId,
+            lcaStart,
+            lcaEnd,
+            legacyRoute,
+            result,
+            metrics
+          );
+
+  const routeHierarchyChain = (endpoint: EdgeEndpointPlan, chains: Point[][]): void => {
+    for (let index = 0; index < endpoint.chain.length - 1; index++) {
+      const from = endpoint.chain[index];
+      const to = endpoint.chain[index + 1];
+      if (!sparseHierarchyIds.has(edge.id)) {
+        const start: SegmentAttachment = {
+          ownerId: from.ownerId,
+          ...itemAttachment(
+            from.ownerId,
+            from.side,
+            from.demandKey,
+            to.ownerId,
+            result,
+            demandCoords
+          ),
+        };
+        const end: SegmentAttachment = {
+          ownerId: to.ownerId,
+          ...boundaryAttachment(to.ownerId, to.side, to.demandKey, result, demandCoords),
+        };
+        chains.push(
+          validatedCompatibilitySegment(
+            edge.id,
+            to.ownerId,
+            start,
+            end,
+            () => routeWithinContainer(to.ownerId, result, start, end, plan.laneIndex),
+            result,
+            metrics
+          )
+        );
+        continue;
+      }
+      const start =
+        index === 0
+          ? itemSegmentAttachment(from, to.ownerId)
+          : portalAttachment(pairedPortal(from), false);
+      const end = portalAttachment(pairedPortal(to), true);
+      chains.push(
+        sparseContainerSegment(
+          edge.id,
+          to.ownerId,
+          start,
+          end,
+          () => routeWithinContainer(to.ownerId, result, start, end, plan.laneIndex),
+          result,
+          routingContext,
+          searchWorkspace,
+          endpointOverlayScratch.get(to.ownerId),
+          options,
+          pairRoutes.get(plan.pairKey) ?? [],
+          () => alternativePairedPortals(to),
+          () => (index === 0 ? alternativeItemAttachments(plan, from, to.ownerId) : []),
+          plan.bundleSize > 1
+        )
+      );
+    }
+  };
+  const sourceChains: Point[][] = [];
+  const targetChains: Point[][] = [];
+  routeHierarchyChain(plan.source, sourceChains);
+  routeHierarchyChain(plan.target, targetChains);
+
+  const points = combinePointChains([
+    ...sourceChains,
+    lcaPoints,
+    ...targetChains.reverse().map((chain) => reversePoints(chain)),
+  ]);
+  const committedPairRoutes = pairRoutes.get(plan.pairKey) ?? [];
+  const satisfiesPairConstraints = routeSatisfiesPairConstraints(points, committedPairRoutes);
+  const relaxHierarchySeparation =
+    !satisfiesPairConstraints &&
+    plan.bundleSize > 1 &&
+    plan.source.chain.length + plan.target.chain.length > 2 &&
+    routeHasDistinctPairPorts(points, committedPairRoutes);
+  if (
+    plan.bundleSize > 1 &&
+    !satisfiesPairConstraints &&
+    (!relaxHierarchySeparation || !allowHierarchyRelaxation)
+  ) {
+    if (metrics) {
+      metrics.routesImpossible++;
+    }
+    throw gridError('GRID_ROUTE_NOT_FOUND', `No distinct lane route for "${edge.id}"`, {
+      edgeId: edge.id,
+      reason: relaxHierarchySeparation ? 'pair-separation' : 'no-distinct-route',
+    });
+  }
+  if (relaxHierarchySeparation && metrics) {
+    metrics.bundleSeparationRelaxations++;
+  }
+  edge.points = points;
+  edge.curve = result.config.curve;
+  edge.cornerRadius = result.config.edgeCornerRadius;
+  committedPairRoutes.push(points);
+  pairRoutes.set(plan.pairKey, committedPairRoutes);
+  if (metrics && instrumentedRoutes) {
+    const boundaryTransitionCount = plan.source.chain.length + plan.target.chain.length - 2;
+    recordGridRoute(
+      metrics,
+      edge.id,
+      points,
+      instrumentedRoutes,
+      boundaryTransitionCount,
+      plan.laneOffset
+    );
+    instrumentedRoutes.push(points);
+  }
+}
+
+/*
+ * TODO: Break `routeGridEdges()` into a private routing session with explicit phases and
+ * transactional bundle retries.
+ *
+ * The function currently owns the complete routing invocation: plan collection and ordering,
+ * endpoint allocation, compatibility fast-path selection, sparse-routing state, hierarchy portal
+ * selection, routing each plan, committing routes, and retrying bundles. Those phases communicate
+ * through several mutable maps and arrays captured by nested closures, including demand
+ * coordinates, paired portals, pair routes, loop and side counts, instrumentation routes, search
+ * workspace, and topology overlay scratch storage. Keeping that state in one function makes the
+ * ordering dependencies hard to review and makes rollback correctness depend on every closure
+ * knowing which structures it mutates.
+ *
+ * A production-quality refactor should introduce a private `GridEdgeRoutingSession` class, or an
+ * equivalent module with an explicit `RoutingSession` state object, and separate these operations:
+ *
+ * 1. Collect and deterministically order plans, endpoint demands, and endpoint candidates.
+ * 2. Prepare and validate corridor fast-path routes.
+ * 3. Route one plan, including self-loops, LCA segments, hierarchy chains, and portal alternatives.
+ * 4. Route a bundle as a transaction: initial order, deterministic retry order, then the documented
+ *    hierarchy-separation relaxation.
+ * 5. Commit or restore all route, portal, demand, pair, edge, and instrumentation state.
+ *
+ * Bundle rollback should move behind named `createBundleCheckpoint()` and
+ * `restoreBundleCheckpoint()` operations. Do not implement this by blindly cloning and restoring
+ * the complete instrumentation object. Metrics describing committed output, such as route totals
+ * and selected portals, must be rolled back, while metrics describing work performed, such as
+ * searches, expanded states, fallback attempts, and retry attempts, must survive a failed attempt.
+ * Centralize that distinction in a typed checkpoint in `routerInstrumentation.ts` so adding a new
+ * metric requires an explicit decision about whether it is transactional or cumulative.
+ *
+ * Perform the extraction incrementally and without changing route selection: first isolate the
+ * checkpoint, then plan preparation, then single-plan routing, and finally move the remaining
+ * session state. After each step, verify deterministic geometry and ordering, hierarchy and bundle
+ * retries, resource fallbacks, and instrumentation totals.
+ */
+export function routeGridEdges(
+  layout: LayoutData,
+  result: GridLayoutResult,
+  metrics?: GridRoutingInstrumentation,
+  options: GridRoutingOptions = {}
+): void {
+  rootContainerMeta(result);
+  const prepared = prepareEdgeRoutes(layout, result);
+  const { eligibleIds, orderedPlans, demandCoords, endpointCandidatesByEdge } = prepared;
+
+  /*
+   * Grid routing currently uses two algorithms:
+   *
+   * - `routeWithinContainer()` is the deterministic corridor router. During normal rendering, an
+   *   ordinary unbundled same-container edge uses it as a fast path when its endpoint ports are
+   *   legal, the complete route passes measured-geometry validation, and its length equals the
+   *   Manhattan lower bound. This avoids building a visibility topology and running A* for routes
+   *   that sparse search cannot improve.
+   * - The sparse visibility router handles self-loops, bundles, ordinary routes that fail the fast
+   *   path, and hierarchy routes that need alternative portals or obstacle-aware search.
+   *
+   * Test-only topology/search caps and dual-route comparison disable the fast path intentionally:
+   * those modes must exercise sparse topology, search, and fallback behavior. Normal router and
+   * performance tests cover the production fast path separately.
+   *
+   * Hierarchy routing is still partially migrated. Bundles, routes whose two endpoints have no
+   * unrelated incident edges, and plans whose corridor route fails validation use sparse routing
+   * for every hierarchy-chain segment. Other single hierarchy edges may retain validated corridor
+   * segments when at least one endpoint is shared with another edge. Group-to-descendant routes
+   * always use sparse routing for their LCA segment, even when their ascent or descent chain still
+   * uses corridor routing. Defined sparse resource-limit failures also use the corridor route as a
+   * fallback, but only after that route passes the same geometry and pair-separation validation.
+   *
+   * Finishing the migration requires sparse routing to handle the remaining mixed-demand
+   * hierarchy segments without introducing shared subpaths or crossings, and to meet the large
+   * graph performance target without the common-edge fast path. It also requires generated nested
+   * hierarchy, label, loop, bundle, and fallback coverage plus release-level validation. Only then
+   * can `routeWithinContainer()`, corridor metadata, compatibility/fallback instrumentation, and
+   * their obsolete tests be removed.
+   */
+  const { compatibilityFastRoutes, sparseHierarchyIds, sparseLcaIds, routedContainerIds } =
+    prepareRoutingModes(prepared, result, metrics, options);
   const context = buildRoutingContext(routedContainerIds, result, metrics, options);
   const searchWorkspace = new RouterSearchWorkspace();
   const endpointOverlayScratch = new Map(
@@ -2996,283 +3401,30 @@ export function routeGridEdges(
   const selfLoopCounts = new Map<string, number>();
   const pairRoutes = new Map<string, Point[][]>();
 
-  const routePlan = (plan: EdgeRoutePlan, allowHierarchyRelaxation = true): void => {
-    const edge = plan.edge;
-    const sourceNode = edge.start ? result.forest.nodeById.get(edge.start) : undefined;
-    const targetNode = edge.end ? result.forest.nodeById.get(edge.end) : undefined;
-    if (!sourceNode || !targetNode) {
-      throw gridError('GRID_MISSING_ENDPOINT', `Missing endpoint for edge "${edge.id}"`, {
-        edgeId: edge.id,
-      });
-    }
-
-    if (sourceNode.id === targetNode.id) {
-      const committedPairRoutes = pairRoutes.get(plan.pairKey) ?? [];
-      const { points, side, index } = sparseSelfLoopRoute(
-        plan,
-        sourceNode,
-        result,
-        context,
-        searchWorkspace,
-        endpointOverlayScratch.get(sourceNode.parentId ?? ROOT_CONTAINER_ID),
-        ownerSideCounts,
-        selfLoopCounts,
-        committedPairRoutes,
-        options
-      );
-      const countKey = `${sourceNode.id}:${side}`;
-      selfLoopCounts.set(countKey, index + 1);
-      edge.points = points;
-      edge.curve = result.config.curve;
-      edge.cornerRadius = result.config.edgeCornerRadius;
-      committedPairRoutes.push(points);
-      pairRoutes.set(plan.pairKey, committedPairRoutes);
-      if (metrics && instrumentedRoutes) {
-        recordGridRoute(metrics, edge.id, points, instrumentedRoutes, 0, plan.laneOffset);
-        instrumentedRoutes.push(points);
-      }
-      return;
-    }
-
-    const sourceFinal = plan.source.chain[plan.source.chain.length - 1];
-    const targetFinal = plan.target.chain[plan.target.chain.length - 1];
-    const useSparseLca = sparseLcaIds.has(edge.id);
-    const lcaStart: SegmentAttachment = useSparseLca
-      ? plan.source.finalKind === 'boundary'
-        ? groupBoundaryEndpointAttachment(
-            sourceFinal.ownerId,
-            sourceFinal.side,
-            sourceFinal.demandKey,
-            result,
-            demandCoords
-          )
-        : plan.source.chain.length > 1
-          ? portalAttachment(pairedPortal(sourceFinal), false)
-          : itemSegmentAttachment(sourceFinal, plan.lcaContainerId)
-      : {
-          ownerId: sourceFinal.ownerId,
-          ...(plan.source.finalKind === 'boundary'
-            ? boundaryAttachment(
-                plan.lcaContainerId,
-                sourceFinal.side,
-                sourceFinal.demandKey,
-                result,
-                demandCoords
-              )
-            : itemAttachment(
-                sourceFinal.ownerId,
-                sourceFinal.side,
-                sourceFinal.demandKey,
-                plan.lcaContainerId,
-                result,
-                demandCoords
-              )),
-        };
-    const lcaEnd: SegmentAttachment = useSparseLca
-      ? plan.target.finalKind === 'boundary'
-        ? groupBoundaryEndpointAttachment(
-            targetFinal.ownerId,
-            targetFinal.side,
-            targetFinal.demandKey,
-            result,
-            demandCoords
-          )
-        : plan.target.chain.length > 1
-          ? portalAttachment(pairedPortal(targetFinal), false)
-          : itemSegmentAttachment(targetFinal, plan.lcaContainerId)
-      : {
-          ownerId: targetFinal.ownerId,
-          ...(plan.target.finalKind === 'boundary'
-            ? boundaryAttachment(
-                plan.lcaContainerId,
-                targetFinal.side,
-                targetFinal.demandKey,
-                result,
-                demandCoords
-              )
-            : itemAttachment(
-                targetFinal.ownerId,
-                targetFinal.side,
-                targetFinal.demandKey,
-                plan.lcaContainerId,
-                result,
-                demandCoords
-              )),
-        };
-    let legacyLcaPoints: Point[] | undefined;
-    const legacyRoute = () =>
-      (legacyLcaPoints ??= routeWithinContainer(
-        plan.lcaContainerId,
-        result,
-        lcaStart,
-        lcaEnd,
-        plan.laneIndex
-      ));
-    const compatibilityFastRoute = compatibilityFastRoutes.get(edge.id);
-    const lcaPoints = compatibilityFastRoute
-      ? (() => {
-          if (metrics) {
-            metrics.compatibilityFastPaths++;
-          }
-          return compatibilityFastRoute;
-        })()
-      : eligibleIds.has(edge.id)
-        ? sparseSameContainerRoute(
-            plan,
-            endpointCandidatesByEdge.get(edge.id)!.sources,
-            endpointCandidatesByEdge.get(edge.id)!.targets,
-            sourceNode,
-            targetNode,
-            legacyRoute,
-            result,
-            context,
-            searchWorkspace,
-            endpointOverlayScratch.get(plan.lcaContainerId)!,
-            options,
-            pairRoutes.get(plan.pairKey) ?? []
-          )
-        : useSparseLca
-          ? sparseContainerSegment(
-              edge.id,
-              plan.lcaContainerId,
-              lcaStart,
-              lcaEnd,
-              legacyRoute,
-              result,
-              context,
-              searchWorkspace,
-              endpointOverlayScratch.get(plan.lcaContainerId),
-              options,
-              pairRoutes.get(plan.pairKey) ?? [],
-              () =>
-                plan.target.finalKind === 'item' && plan.target.chain.length > 1
-                  ? alternativePairedPortals(targetFinal, false)
-                  : [],
-              () =>
-                plan.source.finalKind === 'item' && plan.source.chain.length > 1
-                  ? alternativePairedPortals(sourceFinal, false)
-                  : [],
-              plan.bundleSize > 1
-            )
-          : validatedCompatibilitySegment(
-              edge.id,
-              plan.lcaContainerId,
-              lcaStart,
-              lcaEnd,
-              legacyRoute,
-              result,
-              metrics
-            );
-
-    const routeHierarchyChain = (endpoint: EdgeEndpointPlan, chains: Point[][]): void => {
-      for (let index = 0; index < endpoint.chain.length - 1; index++) {
-        const from = endpoint.chain[index];
-        const to = endpoint.chain[index + 1];
-        if (!sparseHierarchyIds.has(edge.id)) {
-          const start: SegmentAttachment = {
-            ownerId: from.ownerId,
-            ...itemAttachment(
-              from.ownerId,
-              from.side,
-              from.demandKey,
-              to.ownerId,
-              result,
-              demandCoords
-            ),
-          };
-          const end: SegmentAttachment = {
-            ownerId: to.ownerId,
-            ...boundaryAttachment(to.ownerId, to.side, to.demandKey, result, demandCoords),
-          };
-          chains.push(
-            validatedCompatibilitySegment(
-              edge.id,
-              to.ownerId,
-              start,
-              end,
-              () => routeWithinContainer(to.ownerId, result, start, end, plan.laneIndex),
-              result,
-              metrics
-            )
-          );
-          continue;
-        }
-        const start =
-          index === 0
-            ? itemSegmentAttachment(from, to.ownerId)
-            : portalAttachment(pairedPortal(from), false);
-        const end = portalAttachment(pairedPortal(to), true);
-        chains.push(
-          sparseContainerSegment(
-            edge.id,
-            to.ownerId,
-            start,
-            end,
-            () => routeWithinContainer(to.ownerId, result, start, end, plan.laneIndex),
-            result,
-            context,
-            searchWorkspace,
-            endpointOverlayScratch.get(to.ownerId),
-            options,
-            pairRoutes.get(plan.pairKey) ?? [],
-            () => alternativePairedPortals(to),
-            () => (index === 0 ? alternativeItemAttachments(plan, from, to.ownerId) : []),
-            plan.bundleSize > 1
-          )
-        );
-      }
-    };
-    const sourceChains: Point[][] = [];
-    const targetChains: Point[][] = [];
-    routeHierarchyChain(plan.source, sourceChains);
-    routeHierarchyChain(plan.target, targetChains);
-
-    const points = combinePointChains([
-      ...sourceChains,
-      lcaPoints,
-      ...targetChains.reverse().map((chain) => reversePoints(chain)),
-    ]);
-    const committedPairRoutes = pairRoutes.get(plan.pairKey) ?? [];
-    const satisfiesPairConstraints = routeSatisfiesPairConstraints(points, committedPairRoutes);
-    const relaxHierarchySeparation =
-      !satisfiesPairConstraints &&
-      plan.bundleSize > 1 &&
-      plan.source.chain.length + plan.target.chain.length > 2 &&
-      routeHasDistinctPairPorts(points, committedPairRoutes);
-    if (
-      plan.bundleSize > 1 &&
-      !satisfiesPairConstraints &&
-      (!relaxHierarchySeparation || !allowHierarchyRelaxation)
-    ) {
-      if (metrics) {
-        metrics.routesImpossible++;
-      }
-      throw gridError('GRID_ROUTE_NOT_FOUND', `No distinct lane route for "${edge.id}"`, {
-        edgeId: edge.id,
-        reason: relaxHierarchySeparation ? 'pair-separation' : 'no-distinct-route',
-      });
-    }
-    if (relaxHierarchySeparation && metrics) {
-      metrics.bundleSeparationRelaxations++;
-    }
-    edge.points = points;
-    edge.curve = result.config.curve;
-    edge.cornerRadius = result.config.edgeCornerRadius;
-    committedPairRoutes.push(points);
-    pairRoutes.set(plan.pairKey, committedPairRoutes);
-    if (metrics && instrumentedRoutes) {
-      const boundaryTransitionCount = plan.source.chain.length + plan.target.chain.length - 2;
-      recordGridRoute(
-        metrics,
-        edge.id,
-        points,
-        instrumentedRoutes,
-        boundaryTransitionCount,
-        plan.laneOffset
-      );
-      instrumentedRoutes.push(points);
-    }
+  const routePlanState: RouteGridPlanContext = {
+    result,
+    routingContext: context,
+    searchWorkspace,
+    endpointOverlayScratch,
+    demandCoords,
+    ownerSideCounts,
+    selfLoopCounts,
+    pairRoutes,
+    instrumentedRoutes,
+    metrics,
+    options,
+    eligibleIds,
+    endpointCandidatesByEdge,
+    compatibilityFastRoutes,
+    sparseHierarchyIds,
+    sparseLcaIds,
+    pairedPortal,
+    alternativePairedPortals,
+    itemSegmentAttachment,
+    alternativeItemAttachments,
   };
+  const routePlan = (plan: EdgeRoutePlan, allowHierarchyRelaxation = true): void =>
+    routeGridPlan(plan, routePlanState, allowHierarchyRelaxation);
 
   const plansByPair = new Map<string, EdgeRoutePlan[]>();
   for (const plan of orderedPlans) {
