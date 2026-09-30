@@ -103,6 +103,32 @@ describe('sanitizeDirective', () => {
       expect(args.grid.placements).toEqual({ valid: { row: 1 } });
     });
 
+    it('deletes grid placement values that do not match the schema', () => {
+      const args = {
+        grid: {
+          placements: {
+            mixed: {
+              row: 'first',
+              column: 2,
+              horizontalAlign: 'middle',
+              verticalAlign: 'bottom',
+            },
+            invalid: {
+              row: 0,
+              column: 1.5,
+              horizontalAlign: {},
+              verticalAlign: null,
+            },
+          },
+        },
+      };
+      sanitizeDirective(args);
+      expect(args.grid.placements).toEqual({
+        mixed: { column: 2, verticalAlign: 'bottom' },
+        invalid: {},
+      });
+    });
+
     it('does not apply grid placement sanitization outside grid config', () => {
       const args = {
         flowchart: {

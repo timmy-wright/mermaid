@@ -1,5 +1,6 @@
 import { configKeys } from '../defaultConfig.js';
 import { log } from '../logger.js';
+import { sanitizeGridPlacements } from './gridPlacement.js';
 
 /**
  * Dictionary-style configs have arbitrary user-defined keys, so instead of
@@ -14,9 +15,6 @@ const DICTIONARY_CONFIG_PATTERNS: Record<string, RegExp> = {
   extensionIcons: /^[\w-]+(?::[\w-]+)?$/,
 };
 
-const GRID_PLACEMENT_KEYS = new Set(['row', 'column', 'horizontalAlign', 'verticalAlign']);
-const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-
 const sanitizeDictionaryConfig = (dict: Record<string, unknown>, valuePattern: RegExp): void => {
   for (const key of Object.keys(dict)) {
     const value = dict[key];
@@ -29,29 +27,6 @@ const sanitizeDictionaryConfig = (dict: Record<string, unknown>, valuePattern: R
     ) {
       log.debug('sanitize deleting dictionary entry:', key, value);
       delete dict[key];
-    }
-  }
-};
-
-const sanitizeGridPlacements = (dict: Record<string, unknown>): void => {
-  for (const key of Object.keys(dict)) {
-    const value = dict[key];
-    if (
-      UNSAFE_OBJECT_KEYS.has(key) ||
-      typeof value !== 'object' ||
-      value === null ||
-      Array.isArray(value)
-    ) {
-      log.debug('sanitize deleting object dictionary entry:', key, value);
-      delete dict[key];
-      continue;
-    }
-    const placement = value as Record<string, unknown>;
-    for (const placementKey of Object.keys(placement)) {
-      if (!GRID_PLACEMENT_KEYS.has(placementKey) || placement[placementKey] == null) {
-        log.debug('sanitize deleting grid placement property:', placementKey);
-        delete placement[placementKey];
-      }
     }
   }
 };

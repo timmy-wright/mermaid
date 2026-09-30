@@ -1,5 +1,10 @@
 import { log } from '../../../logger.js';
 import type { GridPlacement } from '../../../types.js';
+import {
+  isGridHorizontalAlign,
+  isGridVerticalAlign,
+  isValidGridCoordinate,
+} from '../../../utils/gridPlacement.js';
 import { resolveEdgeCornerRadius } from '../../edgeCornerRadius.js';
 import type { Node } from '../../types.js';
 import {
@@ -33,10 +38,6 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';
 }
 
-function readAlign<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
-  return typeof value === 'string' && allowed.includes(value as T) ? (value as T) : undefined;
-}
-
 function ownPlacementFrom(value: unknown): Partial<GridPlacement> {
   if (!isObjectRecord(value)) {
     return {};
@@ -48,13 +49,11 @@ function ownPlacementFrom(value: unknown): Partial<GridPlacement> {
   if (Object.hasOwn(value, 'column')) {
     placement.column = value.column as number | undefined;
   }
-  const horizontalAlign = readAlign(value.horizontalAlign, ['left', 'center', 'right']);
-  if (horizontalAlign) {
-    placement.horizontalAlign = horizontalAlign;
+  if (isGridHorizontalAlign(value.horizontalAlign)) {
+    placement.horizontalAlign = value.horizontalAlign;
   }
-  const verticalAlign = readAlign(value.verticalAlign, ['top', 'center', 'bottom']);
-  if (verticalAlign) {
-    placement.verticalAlign = verticalAlign;
+  if (isGridVerticalAlign(value.verticalAlign)) {
+    placement.verticalAlign = value.verticalAlign;
   }
   return placement;
 }
@@ -67,12 +66,7 @@ function validateCoordinate(
   if (value === undefined) {
     return;
   }
-  if (
-    typeof value !== 'number' ||
-    !Number.isFinite(value) ||
-    !Number.isSafeInteger(value) ||
-    value <= 0
-  ) {
+  if (!isValidGridCoordinate(value)) {
     throw gridError('GRID_INVALID_COORDINATE', `Invalid ${field} for "${nodeId}"`, {
       nodeId,
       field,
@@ -128,10 +122,12 @@ export function readGridConfig(data: GridLayoutData): GridLayoutConfigNormalized
       typeof raw.titleGap === 'number' && Number.isFinite(raw.titleGap) && raw.titleGap >= 0
         ? raw.titleGap
         : GRID_DEFAULTS.titleGap,
-    horizontalAlign:
-      readAlign(raw.horizontalAlign, ['left', 'center', 'right']) ?? GRID_DEFAULTS.horizontalAlign,
-    verticalAlign:
-      readAlign(raw.verticalAlign, ['top', 'center', 'bottom']) ?? GRID_DEFAULTS.verticalAlign,
+    horizontalAlign: isGridHorizontalAlign(raw.horizontalAlign)
+      ? raw.horizontalAlign
+      : GRID_DEFAULTS.horizontalAlign,
+    verticalAlign: isGridVerticalAlign(raw.verticalAlign)
+      ? raw.verticalAlign
+      : GRID_DEFAULTS.verticalAlign,
     curve:
       typeof raw.curve === 'string' && GRID_CURVES.has(raw.curve as GridCurve)
         ? (raw.curve as GridCurve)
