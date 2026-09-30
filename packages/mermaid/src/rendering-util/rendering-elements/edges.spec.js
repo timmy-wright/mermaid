@@ -172,10 +172,10 @@ describe('insertEdge swimlane endpoint clipping', () => {
   });
 });
 
-describe('insertEdge grid endpoint geometry', () => {
+describe('insertEdge orthogonal endpoint clipping', () => {
   it('clips router-owned ports to shape outlines with orthogonal endpoint doglegs', () => {
     vi.mocked(getConfig).mockReturnValue({
-      layout: 'grid',
+      layout: 'dagre',
       flowchart: { curve: 'rounded', arrowMarkerAbsolute: false },
       state: { arrowMarkerAbsolute: false },
       handDrawnSeed: 0,
@@ -199,6 +199,8 @@ describe('insertEdge grid endpoint geometry', () => {
       look: 'classic',
       arrowTypeStart: 'none',
       arrowTypeEnd: 'arrow_point',
+      portClipping: 'outline-orthogonal',
+      skipCornerFix: true,
       points,
     };
     const tail = {
@@ -231,7 +233,7 @@ describe('insertEdge grid endpoint geometry', () => {
 
   it('keeps rectangular outline points unchanged', () => {
     vi.mocked(getConfig).mockReturnValue({
-      layout: 'grid',
+      layout: 'dagre',
       flowchart: { curve: 'rounded', arrowMarkerAbsolute: false },
       state: { arrowMarkerAbsolute: false },
       handDrawnSeed: 0,
@@ -255,6 +257,8 @@ describe('insertEdge grid endpoint geometry', () => {
       look: 'classic',
       arrowTypeStart: 'none',
       arrowTypeEnd: 'arrow_point',
+      portClipping: 'outline-orthogonal',
+      skipCornerFix: true,
       points,
     };
 
@@ -281,7 +285,7 @@ describe('insertEdge grid endpoint geometry', () => {
 
   it('keeps a two-point route orthogonal when both shape outlines are inset', () => {
     vi.mocked(getConfig).mockReturnValue({
-      layout: 'grid',
+      layout: 'dagre',
       flowchart: { curve: 'rounded', arrowMarkerAbsolute: false },
       state: { arrowMarkerAbsolute: false },
       handDrawnSeed: 0,
@@ -299,6 +303,8 @@ describe('insertEdge grid endpoint geometry', () => {
       look: 'classic',
       arrowTypeStart: 'none',
       arrowTypeEnd: 'arrow_point',
+      portClipping: 'outline-orthogonal',
+      skipCornerFix: true,
       points: [
         { x: 0, y: 10 },
         { x: 100, y: 10 },

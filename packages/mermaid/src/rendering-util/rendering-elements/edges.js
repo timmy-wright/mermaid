@@ -31,6 +31,7 @@ import {
 import rough from 'roughjs';
 import createLabel from './createLabel.js';
 import { addEdgeMarkers } from './edgeMarker.ts';
+import { clipOrthogonalEndpointsToNodeOutlines } from './orthogonalEdgeClipping.js';
 import { isLabelStyle, styles2String } from './shapes/handDrawnShapeStyles.js';
 
 /**
@@ -375,116 +376,6 @@ const orthogonalizeToLabelClippedPoints = (edge, points) => {
   return [start, { x: end.x, y: start.y }, end];
 };
 
-const GRID_ENDPOINT_EPSILON = 1e-6;
-
-const isFinitePoint = (point) => point && Number.isFinite(point.x) && Number.isFinite(point.y);
-
-const samePoint = (first, second) =>
-  Math.abs(first.x - second.x) <= GRID_ENDPOINT_EPSILON &&
-  Math.abs(first.y - second.y) <= GRID_ENDPOINT_EPSILON;
-
-const appendDistinctPoint = (points, point) => {
-  if (!points.length || !samePoint(points.at(-1), point)) {
-    points.push(point);
-  }
-};
-
-const outlineEndpoint = (node, port, adjacent) => {
-  if (!node?.intersect) {
-    return undefined;
-  }
-  const outline = node.intersect(adjacent);
-  if (
-    !isFinitePoint(outline) ||
-    (Number.isFinite(node.x) &&
-      Number.isFinite(node.y) &&
-      samePoint(outline, { x: node.x, y: node.y }))
-  ) {
-    return undefined;
-  }
-  const vertical = Math.abs(port.x - adjacent.x) <= GRID_ENDPOINT_EPSILON;
-  const horizontal = Math.abs(port.y - adjacent.y) <= GRID_ENDPOINT_EPSILON;
-  if (!vertical && !horizontal) {
-    return undefined;
-  }
-  const inwardDirection = vertical
-    ? Math.sign(port.y - adjacent.y)
-    : Math.sign(port.x - adjacent.x);
-  const inwardDepth = vertical
-    ? (outline.y - port.y) * inwardDirection
-    : (outline.x - port.x) * inwardDirection;
-  // Rectangular ports already lie on their outline. Only move an endpoint when the shape boundary
-  // is strictly inward, otherwise clipping would push valid ports outward or reverse the terminal.
-  if (inwardDepth <= GRID_ENDPOINT_EPSILON) {
-    return undefined;
-  }
-  return {
-    outline,
-    elbow: vertical ? { x: outline.x, y: adjacent.y } : { x: adjacent.x, y: outline.y },
-  };
-};
-
-// Keep the router's outside approach as the clearance anchor, but delegate the
-// visible endpoint to the shape's existing outline-intersection contract.
-const clipGridEndpointsToNodeOutlines = (points, tail, head) => {
-  if (!Array.isArray(points) || points.length < 2) {
-    return points;
-  }
-
-  const first = points[0];
-  const second = points[1];
-  const penultimate = points[points.length - 2];
-  const last = points[points.length - 1];
-  const source = outlineEndpoint(tail, first, second);
-  const target = outlineEndpoint(head, last, penultimate);
-  if (!source && !target) {
-    return points;
-  }
-  const clipped = [];
-
-  if (points.length === 2) {
-    const clippedFirst = source?.outline ?? first;
-    const clippedLast = target?.outline ?? last;
-    const vertical = Math.abs(first.x - last.x) <= GRID_ENDPOINT_EPSILON;
-    const horizontal = Math.abs(first.y - last.y) <= GRID_ENDPOINT_EPSILON;
-    if (!vertical && !horizontal) {
-      return points;
-    }
-    // With no existing bend to reuse, split the span midway so clipping both ends cannot introduce
-    // a diagonal segment between differently shaped outlines.
-    appendDistinctPoint(clipped, clippedFirst);
-    if (vertical) {
-      const middleY = (clippedFirst.y + clippedLast.y) / 2;
-      appendDistinctPoint(clipped, { x: clippedFirst.x, y: middleY });
-      appendDistinctPoint(clipped, { x: clippedLast.x, y: middleY });
-    } else {
-      const middleX = (clippedFirst.x + clippedLast.x) / 2;
-      appendDistinctPoint(clipped, { x: middleX, y: clippedFirst.y });
-      appendDistinctPoint(clipped, { x: middleX, y: clippedLast.y });
-    }
-    appendDistinctPoint(clipped, clippedLast);
-    return clipped;
-  }
-
-  if (source) {
-    appendDistinctPoint(clipped, source.outline);
-    appendDistinctPoint(clipped, source.elbow);
-  } else {
-    appendDistinctPoint(clipped, first);
-  }
-  for (const point of points.slice(1, -1)) {
-    appendDistinctPoint(clipped, point);
-  }
-  if (target) {
-    appendDistinctPoint(clipped, target.elbow);
-    appendDistinctPoint(clipped, target.outline);
-  } else {
-    appendDistinctPoint(clipped, last);
-  }
-
-  return clipped;
-};
-
 const outsideNode = (node, point) => {
   const x = node.x;
   const y = node.y;
@@ -734,8 +625,8 @@ export const insertEdge = function (
     edgeClassStyles.push(edge.cssCompiledStyles[key]);
   }
 
-  if (layout === 'grid' && !skipIntersect) {
-    points = clipGridEndpointsToNodeOutlines(points, tail, head);
+  if (edge.portClipping === 'outline-orthogonal' && !skipIntersect) {
+    points = clipOrthogonalEndpointsToNodeOutlines(points, tail, head);
   } else if (layout === 'swimlane') {
     if (head.intersect && tail.intersect && Array.isArray(points) && points.length >= 2) {
       if (points.length === 2) {
@@ -799,10 +690,7 @@ export const insertEdge = function (
   let lineData = points.filter((p) => !Number.isNaN(p.y));
   // Resolve curve type: use edge.curve if it's a string, otherwise fall back to config default
   const edgeCurveType = resolveEdgeCurveType(edge.curve);
-  // Grid routes already contain their final orthogonal geometry. Rounded grid
-  // edges are handled by generateRoundedPath below; linear grid edges must not
-  // receive the diagonal corner transitions added by fixCorners.
-  if (edgeCurveType !== 'rounded' && !(layout === 'grid' && edgeCurveType === 'linear')) {
+  if (edgeCurveType !== 'rounded' && !edge.skipCornerFix) {
     lineData = fixCorners(lineData);
   }
   let curve = curveLinear;
