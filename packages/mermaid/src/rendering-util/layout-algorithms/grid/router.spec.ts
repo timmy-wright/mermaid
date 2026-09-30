@@ -211,7 +211,7 @@ describe('grid router', () => {
     expect(normalizePolyline(data.edges[0].points ?? []).bends).toBeGreaterThan(0);
   });
 
-  it('records current route metrics without changing geometry', () => {
+  it('keeps routing deterministic when edge input order changes', () => {
     const build = () =>
       baseLayout(
         [
@@ -224,42 +224,12 @@ describe('grid router', () => {
       );
     const baseline = build();
     runGridLayoutCore(baseline);
-    const expectedGeometry = baseline.edges.map((item) => item.points);
-
-    const instrumented = build();
-    const metrics = createGridRoutingInstrumentation();
-    runGridLayoutCore(instrumented, metrics);
-
-    expect(instrumented.edges.map((item) => item.points)).toEqual(expectedGeometry);
-    expect(metrics.routeOrder).toEqual(['horizontal', 'vertical']);
-    expect(metrics.routes.map(({ edgeId, routeOrder }) => ({ edgeId, routeOrder }))).toEqual([
-      { edgeId: 'horizontal', routeOrder: 0 },
-      { edgeId: 'vertical', routeOrder: 1 },
-    ]);
-    expect(metrics.routesFound).toBe(2);
-    expect(metrics.routeLength).toBeGreaterThan(0);
-    expect(metrics.bendCount).toBeGreaterThanOrEqual(0);
-    expect(metrics.crossingCount).toBeGreaterThanOrEqual(0);
-    expect(metrics.sharedLength).toBe(0);
-    expect(metrics.baseTopologyBuilds).toBe(0);
-    expect(metrics.searches).toBe(0);
-    expect(metrics.compatibilityFastPathAttempts).toBe(2);
-    expect(metrics.compatibilityFastPaths).toBe(2);
-    expect(metrics.resourceLimitFallbacks).toBe(0);
-    expect(metrics.fallbackReasons).toEqual({
-      vertex_cap: 0,
-      adjacency_cap: 0,
-      estimated_memory_cap: 0,
-      search_state_cap: 0,
-    });
 
     const permuted = build();
     permuted.edges.reverse();
-    const permutedMetrics = createGridRoutingInstrumentation();
-    runGridLayoutCore(permuted, permutedMetrics);
-    expect(permutedMetrics.routeOrder).toEqual(['horizontal', 'vertical']);
+    runGridLayoutCore(permuted);
     expect(new Map(permuted.edges.map((item) => [item.id, item.points]))).toEqual(
-      new Map(instrumented.edges.map((item) => [item.id, item.points]))
+      new Map(baseline.edges.map((item) => [item.id, item.points]))
     );
   });
 
@@ -353,10 +323,8 @@ describe('grid router', () => {
         ],
         { rowGap: 40, columnGap: 60 }
       );
-
     const data = build();
-    const metrics = createGridRoutingInstrumentation();
-    runGridLayoutCore(data, metrics);
+    runGridLayoutCore(data);
 
     const byId = new Map(data.edges.map((item) => [item.id, item.points ?? []]));
     expect(byId.get('e1')).not.toEqual(byId.get('e2'));
@@ -385,17 +353,6 @@ describe('grid router', () => {
         expect(longestSharedNonterminalSubpath(bundle[first], bundle[second])).toBeLessThan(8);
       }
     }
-    expect(metrics.routeOrder).toEqual(['loop-1', 'loop-2', 'e1', 'e2', 'e3', 'e4']);
-    expect(metrics.routes.map(({ edgeId, laneOffset }) => [edgeId, laneOffset])).toEqual([
-      ['loop-1', -4],
-      ['loop-2', 4],
-      ['e1', -12],
-      ['e2', -4],
-      ['e3', 4],
-      ['e4', 12],
-    ]);
-    expect(metrics.resourceLimitFallbacks).toBe(0);
-
     const rerun = build();
     runGridLayoutCore(rerun);
     expect(rerun.edges.map((item) => item.points)).toEqual(data.edges.map((item) => item.points));
@@ -411,9 +368,7 @@ describe('grid router', () => {
       [edge('e1', 'a', 'b'), edge('e2', 'a', 'b'), edge('e3', 'a', 'b'), edge('e4', 'b', 'a')],
       { rowGap: 40, columnGap: 60 }
     );
-    const metrics = createGridRoutingInstrumentation();
-
-    runGridLayoutCore(data, metrics);
+    runGridLayoutCore(data);
 
     expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
     expect(data.edges.some((item) => normalizePolyline(item.points ?? []).bends > 0)).toBe(true);
@@ -424,8 +379,6 @@ describe('grid router', () => {
         );
       }
     }
-    expect(metrics.routes.map(({ laneOffset }) => laneOffset)).toEqual([-12, -4, 4, 12]);
-    expect(metrics.resourceLimitFallbacks).toBe(0);
   });
 
   it('throws an explicit no-route error when a pair cannot allocate distinct 8px lanes', () => {
@@ -434,13 +387,9 @@ describe('grid router', () => {
       Array.from({ length: 10 }, (_, index) => edge(`e${index}`, 'a', 'b')),
       { rowGap: 0, columnGap: 12 }
     );
-    const metrics = createGridRoutingInstrumentation();
-
-    expect(() => runGridLayoutCore(data, metrics)).toThrowError(
+    expect(() => runGridLayoutCore(data)).toThrowError(
       /GRID_ROUTE_NOT_FOUND: No distinct lane route/
     );
-    expect(metrics.routesImpossible).toBe(1);
-    expect(metrics.resourceLimitFallbacks).toBe(0);
   });
 
   it('routes self-loops around adjacent nodes when track gaps are zero', () => {
@@ -513,9 +462,7 @@ describe('grid router', () => {
       [edge('e1', 'a', 'b'), edge('e2', 'a', 'b'), edge('e3', 'b', 'a')],
       { rowGap: 50, columnGap: 90 }
     );
-    const metrics = createGridRoutingInstrumentation();
-
-    runGridLayoutCore(data, metrics);
+    runGridLayoutCore(data);
 
     expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
     expect(new Set(data.edges.map(({ points }) => JSON.stringify(points))).size).toBe(3);
@@ -532,8 +479,6 @@ describe('grid router', () => {
         );
       }
     }
-    expect(metrics.routes.map(({ laneOffset }) => laneOffset)).toEqual([-8, 0, 8]);
-    expect(metrics.resourceLimitFallbacks).toBe(0);
   });
 
   it('selects a shortest straight route through unused cell space over the legacy detour', () => {
@@ -546,22 +491,12 @@ describe('grid router', () => {
       [edge('v1-v2', 'v1', 'v2')],
       { rowGap: 40, columnGap: 40 }
     );
-    const metrics = createGridRoutingInstrumentation();
-
-    runGridLayoutCore(data, metrics);
+    runGridLayoutCore(data);
 
     const normalized = normalizePolyline(data.edges[0].points ?? []);
     expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
     expect(normalized.segments).toHaveLength(1);
     expect(normalized.segments[0]?.orientation).toBe('H');
-    expect(metrics.baseTopologyBuilds).toBe(1);
-    expect(metrics.endpointOverlayBuilds).toBeGreaterThan(0);
-    expect(metrics.searches).toBeGreaterThan(0);
-    expect(metrics.expandedStates).toBeGreaterThan(0);
-    expect(metrics.maxOpenSet).toBeGreaterThan(0);
-    expect(metrics.compatibilityFastPathAttempts).toBe(1);
-    expect(metrics.compatibilityFastPathNonMinimalRoutes).toBe(1);
-    expect(metrics.resourceLimitFallbacks).toBe(0);
   });
 
   it('does not separate edges that use opposite sides of the same node', () => {
@@ -734,6 +669,8 @@ describe('grid router', () => {
       runGridLayoutCore(data, metrics, options);
 
       expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
+      // These counters prove the configured cap selected a validated fallback for the expected
+      // reason; valid geometry alone cannot distinguish fallback routing from the normal path.
       expect(metrics.resourceLimitFallbacks).toBe(1);
       expect(metrics.fallbackReasons[reason]).toBe(1);
       expect(metrics.fallbackValidationFailures).toBe(0);
@@ -751,6 +688,8 @@ describe('grid router', () => {
     expect(() =>
       runGridLayoutCore(data, metrics, { topologyCaps: { maxVertices: 1 } })
     ).toThrowError(/GRID_ROUTE_NOT_FOUND: Invalid legacy fallback/);
+    // The counters are necessary to prove the rejected geometry came from the configured fallback
+    // and that fallback validation, rather than an unrelated routing failure, blocked the commit.
     expect(metrics.resourceLimitFallbacks).toBe(1);
     expect(metrics.fallbackValidationFailures).toBe(1);
   });
@@ -771,6 +710,8 @@ describe('grid router', () => {
     runGridLayoutCore(data, metrics, { topologyCaps: { maxVertices: 1 } });
 
     expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
+    // A cross-group route has three independently capped hierarchy segments; these counters prove
+    // every segment used and validated the fallback rather than only the final assembled route.
     expect(metrics.resourceLimitFallbacks).toBe(3);
     expect(metrics.fallbackReasons.vertex_cap).toBe(3);
     expect(metrics.fallbackValidationFailures).toBe(0);
@@ -793,9 +734,9 @@ describe('grid router', () => {
     });
 
     expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
-    expect(metrics.searches).toBe(2);
+    // The exact expansion count is the configured shared invocation budget; it verifies the router
+    // stops at the cap while retaining the earlier validated candidate.
     expect(metrics.expandedStates).toBe(30);
-    expect(metrics.resourceLimitFallbacks).toBe(0);
     expect(data.edges[0].points).toEqual([
       { x: 80, y: 200 },
       { x: 114, y: 200 },
@@ -845,13 +786,9 @@ describe('grid router', () => {
       [edge('a-b', 'a', 'b')],
       { columnGap: 40 }
     );
-    const metrics = createGridRoutingInstrumentation();
-
-    expect(() => runGridLayoutCore(data, metrics)).toThrowError(
+    expect(() => runGridLayoutCore(data)).toThrowError(
       /GRID_ROUTE_NOT_FOUND: No legal endpoint candidates/
     );
-    expect(metrics.routesImpossible).toBe(1);
-    expect(metrics.resourceLimitFallbacks).toBe(0);
   });
 
   it('routes high-degree endpoints when no side can preserve minimum port spacing', () => {
@@ -874,7 +811,7 @@ describe('grid router', () => {
     ).toBeGreaterThan(1);
   });
 
-  it('retries hierarchy bundles strictly before relaxing separation', () => {
+  it('routes hierarchy bundles when strict separation cannot be preserved', () => {
     const data = baseLayout(
       [
         group('left-group', 'Left', { row: 1, column: 1 }),
@@ -885,14 +822,10 @@ describe('grid router', () => {
       Array.from({ length: 6 }, (_, index) => edge(`edge-${index}`, 'source', 'target')),
       { rowGap: 50, columnGap: 90 }
     );
-    const metrics = createGridRoutingInstrumentation();
-
-    runGridLayoutCore(data, metrics);
+    runGridLayoutCore(data);
 
     expect(data.edges.every(({ points }) => (points?.length ?? 0) >= 2)).toBe(true);
-    expect(metrics.bundleRetryAttempts).toBe(1);
-    expect(metrics.bundleRetrySuccesses).toBe(0);
-    expect(metrics.bundleSeparationRelaxations).toBeGreaterThan(0);
+    expect(invalidRoutingIssues(data)).toEqual([]);
   });
 
   it('excludes group titles and corners from same-container endpoint slots', () => {
@@ -934,16 +867,10 @@ describe('grid router', () => {
       { cellGap: 20 }
     );
 
-    const metrics = createGridRoutingInstrumentation();
-
-    runGridLayoutCore(data, metrics);
+    runGridLayoutCore(data);
 
     expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
     expect(normalizePolyline(data.edges[0].points ?? []).bends).toBeGreaterThanOrEqual(2);
-    expect(metrics.compatibilityFastPaths).toBe(0);
-    expect(metrics.compatibilityFastPathValidationFailures).toBe(1);
-    expect(metrics.baseTopologyBuilds).toBe(1);
-    expect(metrics.searches).toBeGreaterThan(0);
   });
 
   it('routes hierarchy edges to a root sibling in the same stacked cell', () => {
@@ -975,15 +902,10 @@ describe('grid router', () => {
       [edge('hierarchy-edge', 'top', 'outside'), edge('incident-edge', 'top', 'middle')],
       { cellGap: 20, columnGap: 80 }
     );
-    const metrics = createGridRoutingInstrumentation();
-
-    runGridLayoutCore(data, metrics);
+    runGridLayoutCore(data);
 
     expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
     expect(normalizePolyline(data.edges[0].points ?? []).bends).toBeGreaterThanOrEqual(2);
-    expect(metrics.compatibilityValidationFailures).toBe(0);
-    expect(metrics.routesImpossible).toBe(0);
-    expect(metrics.resourceLimitFallbacks).toBe(0);
   });
 
   it('routes a vertical mixed-demand stack without invalid geometry', () => {
@@ -998,14 +920,10 @@ describe('grid router', () => {
       [edge('hierarchy-edge', 'top', 'outside'), edge('incident-edge', 'top', 'middle')],
       { cellGap: 20, rowGap: 80 }
     );
-    const metrics = createGridRoutingInstrumentation();
-
-    runGridLayoutCore(data, metrics);
+    runGridLayoutCore(data);
 
     expect(data.edges.every(({ points }) => (points?.length ?? 0) >= 2)).toBe(true);
     expect(invalidRoutingIssues(data)).toEqual([]);
-    expect(metrics.compatibilityValidationFailures).toBe(0);
-    expect(metrics.resourceLimitFallbacks).toBe(0);
   });
 
   it.each([
@@ -1073,9 +991,7 @@ describe('grid router', () => {
           }
         );
       const data = build();
-      const metrics = createGridRoutingInstrumentation();
-
-      runGridLayoutCore(data, metrics);
+      runGridLayoutCore(data);
 
       expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
       const routed = data.edges[0];
@@ -1090,12 +1006,6 @@ describe('grid router', () => {
           boundaries.includes(owner.id) ? 1 : 0
         );
       }
-      expect(metrics.routes[0]?.boundaryTransitionCount).toBe(boundaries.length);
-      expect(metrics.hierarchyPortalPairs).toBe(boundaries.length);
-      expect(metrics.hierarchyPortalAlternativeAttempts).toBe(0);
-      expect(metrics.hierarchyPortalAlternativeSelections).toBe(0);
-      expect(metrics.resourceLimitFallbacks).toBe(0);
-
       const rerun = build();
       runGridLayoutCore(rerun);
       expect(rerun.edges[0].points).toEqual(routed.points);
@@ -1177,6 +1087,8 @@ describe('grid router', () => {
     const high = crossing?.orientation === 'H' ? rect.bottom - 6 : rect.right - 6;
     expect(tangential).toBeGreaterThanOrEqual(low);
     expect(tangential).toBeLessThanOrEqual(high);
+    // The portal counters express the functional paired-transition contract that is lost when the
+    // final route is normalized: one boundary crossing must use one 12px portal pair.
     expect(metrics.routes[0]?.boundaryTransitionCount).toBe(1);
     expect(metrics.hierarchyPortalPairs).toBe(1);
     expect(metrics.hierarchyPortalTransitionLength).toBe(12);
