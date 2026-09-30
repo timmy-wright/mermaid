@@ -17,6 +17,7 @@ import {
   setDiagramTitle,
   getDiagramTitle,
 } from '../common/commonDb.js';
+import { stripPrototypeKeys } from '../common/sanitizeMetadata.js';
 import { createTooltip } from '../common/svgDrawCommon.js';
 import type {
   FlowClass,
@@ -33,29 +34,26 @@ interface LinkData {
 }
 
 const MERMAID_DOM_ID_PREFIX = 'flowchart-';
+const GRID_LAYOUT_METADATA_KEYS = ['row', 'column', 'horizontalAlign', 'verticalAlign'] as const;
 
-/**
- * Remove `__proto__` / `constructor` / `prototype` own keys from parsed `@{ }`
- * metadata, recursively.
- *
- * Flowchart now forwards node metadata to `LayoutData`, so the same parse-boundary
- * hardening as agentflow is required here too.
- */
-function stripPrototypeKeys<T>(value: T): T {
-  if (Array.isArray(value)) {
-    return value.map((entry) => stripPrototypeKeys(entry)) as T;
+function pickFlowchartLayoutMetadata(
+  metadata: NodeMetaData | undefined,
+  includeContainerAlgorithm = false
+): Record<string, unknown> | undefined {
+  if (!metadata) {
+    return undefined;
   }
-  if (value === null || typeof value !== 'object') {
-    return value;
-  }
-  const clean: Record<string, unknown> = {};
-  for (const key of Object.keys(value)) {
-    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
-      continue;
+  const source = metadata as unknown as Record<string, unknown>;
+  const layoutMetadata: Record<string, unknown> = {};
+  for (const key of GRID_LAYOUT_METADATA_KEYS) {
+    if (Object.hasOwn(source, key)) {
+      layoutMetadata[key] = source[key];
     }
-    clean[key] = stripPrototypeKeys((value as Record<string, unknown>)[key]);
   }
-  return clean as T;
+  if (includeContainerAlgorithm && Object.hasOwn(source, 'algorithm')) {
+    layoutMetadata.algorithm = source.algorithm;
+  }
+  return Object.keys(layoutMetadata).length > 0 ? layoutMetadata : undefined;
 }
 
 // We are using arrow functions assigned to class instance fields instead of methods as they are required by flow JISON
@@ -1088,7 +1086,7 @@ You have to call mermaid.initialize.`
         assetWidth: vertex.assetWidth,
         assetHeight: vertex.assetHeight,
         constraint: vertex.constraint,
-        metadata: vertex.metadata as Record<string, unknown> | undefined,
+        metadata: pickFlowchartLayoutMetadata(vertex.metadata),
       };
       if (isGroup) {
         nodes.push({
@@ -1273,12 +1271,7 @@ You have to call mermaid.initialize.`
           isGroup: true,
           look: config.look,
           colorIndex: declarationIndex.get(subGraph.id),
-          // Forwarded so layout engines can read per-container settings such as
-          // `@{ algorithm: elk.box }`. `view` is consumed above; everything else
-          // is opaque here and simply passed through. The cast is the
-          // interface-vs-index-signature gap: `NodeMetaData` is an interface, so
-          // it is not structurally assignable to `Record<string, unknown>`.
-          metadata: subGraph.metadata as Record<string, unknown> | undefined,
+          metadata: pickFlowchartLayoutMetadata(subGraph.metadata, true),
         });
       }
     }

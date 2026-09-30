@@ -201,14 +201,14 @@ describe('flow db collapsible subgraphs', () => {
     addVertex('A');
     addVertex('B');
     flowDb.addSubGraph({ text: 'sub1' }, ['A', 'B'], { text: 'My Group', type: 'text' });
-    attachMeta('sub1', ' algorithm: elk.box ');
+    attachMeta('sub1', ' algorithm: elk.box, note: ignored ');
 
     const { nodes } = flowDb.getData();
     const sub = nodes.find((n) => n.id === 'sub1');
     expect(sub?.isGroup).toBe(true);
     // Without this the `@{ algorithm: … }` a user writes on a flowchart
     // subgraph never reached the layout engine.
-    expect(sub?.metadata).toMatchObject({ algorithm: 'elk.box' });
+    expect(sub?.metadata).toEqual({ algorithm: 'elk.box' });
   });
 
   it('renders a collapsed subgraph as a single collapsedGroup node and hides its members', () => {
@@ -282,7 +282,7 @@ describe('flow db collapsible subgraphs', () => {
 });
 
 describe('flow db metadata propagation', () => {
-  it('preserves grid and custom metadata on emitted leaf nodes', () => {
+  it('forwards only grid metadata on emitted leaf nodes', () => {
     flow.parser.yy = new FlowDB();
     flow.parser.yy.clear();
     flow.parser.parse(`flowchart TD
@@ -290,12 +290,11 @@ describe('flow db metadata propagation', () => {
 
     const { nodes } = flow.parser.yy.getData();
     const node = nodes.find((item: { id: string }) => item.id === 'A');
-    expect(node?.metadata).toMatchObject({
+    expect(node?.metadata).toEqual({
       row: 2,
       column: 3,
       horizontalAlign: 'left',
       verticalAlign: 'bottom',
-      note: 'kept',
     });
   });
 
