@@ -1713,6 +1713,30 @@ function recordFallback(
   });
 }
 
+/*
+ * TODO: Consider an opt-in `grid.routingPolicy: 'best-effort'` mode while keeping validated
+ * routing as the default.
+ *
+ * A minimal implementation could catch recoverable per-edge routing exhaustion after both the
+ * sparse router and validated compatibility route fail, then construct a deterministic orthogonal
+ * dogleg between the measured source and target bounds. Self-loops would need a similarly
+ * deterministic rectangular loop. The fallback could cross protected geometry or share bundle
+ * lanes, but it must still use finite coordinates, preserve valid endpoints, avoid partially
+ * committed state, and emit a warning containing the edge id and original failure reason.
+ *
+ * A production-quality implementation would need:
+ * - Explicit classification of recoverable geometry exhaustion versus malformed input and internal
+ *   invariants. Invalid coordinates, containment, measurements, endpoints, and topology state must
+ *   remain errors in every mode.
+ * - Transactional per-edge fallback that updates pair-route, portal, instrumentation, and retry
+ *   state consistently.
+ * - Documented constraints that best-effort routing may relax, with deterministic output and
+ *   observable warnings or metrics for every degraded edge.
+ * - A matching label policy that restores provisional label-routing state before placing a label
+ *   at a deterministic fallback position or omitting it.
+ * - Tests for both policies using the same production paths, including hierarchy routes,
+ *   self-loops, bundles, resource-limit fallbacks, and label-placement exhaustion.
+ */
 function sparseSameContainerRoute(
   plan: EdgeRoutePlan,
   sources: readonly EndpointCandidate[],
