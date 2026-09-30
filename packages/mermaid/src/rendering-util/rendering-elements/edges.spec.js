@@ -67,6 +67,103 @@ describe('rounded edge corners', () => {
   });
 });
 
+describe('insertEdge non-grid compatibility', () => {
+  const layouts = ['dagre', 'elk', 'swimlane'];
+  const points = [
+    { x: 0, y: 0 },
+    { x: 0, y: 20 },
+    { x: 20, y: 20 },
+    { x: 20, y: 40 },
+  ];
+
+  const setLayout = (layout) => {
+    vi.mocked(getConfig).mockReturnValue({
+      layout,
+      flowchart: { curve: 'rounded', arrowMarkerAbsolute: false },
+      state: { arrowMarkerAbsolute: false },
+      handDrawnSeed: 0,
+    });
+  };
+
+  const makeEdge = (overrides = {}) => ({
+    id: 'non-grid-edge',
+    cssCompiledStyles: {},
+    style: [],
+    thickness: 'normal',
+    pattern: 'solid',
+    classes: 'flowchart-link',
+    look: 'classic',
+    arrowTypeStart: 'none',
+    arrowTypeEnd: 'none',
+    points,
+    ...overrides,
+  });
+
+  it.each(layouts)('%s linear edges retain legacy corner fixing', (layout) => {
+    setLayout(layout);
+    document.body.innerHTML = '';
+    const svg = select(document.body).append('svg');
+
+    insertEdge(
+      svg,
+      makeEdge({ curve: 'linear' }),
+      null,
+      'flowchart-v2',
+      { intersect: vi.fn(() => points[0]) },
+      { intersect: vi.fn(() => points.at(-1)) },
+      'diagram'
+    );
+
+    const path = svg.select('path');
+    expect(JSON.parse(atob(path.attr('data-points')))).toEqual(points);
+    expect(path.attr('d')).not.toBe('M0,0L0,20L20,20L20,40');
+    expect(path.attr('d').match(/L/g)).toHaveLength(7);
+  });
+
+  it.each(layouts)('%s rounded edges default to a 5px corner radius', (layout) => {
+    setLayout(layout);
+    document.body.innerHTML = '';
+    const svg = select(document.body).append('svg');
+
+    insertEdge(
+      svg,
+      makeEdge({ curve: 'rounded' }),
+      null,
+      'flowchart-v2',
+      { intersect: vi.fn(() => points[0]) },
+      { intersect: vi.fn(() => points.at(-1)) },
+      'diagram'
+    );
+
+    expect(svg.select('path').attr('d')).toBe(generateRoundedPath(points, 5));
+  });
+
+  it.each(layouts)('%s edges do not use grid orthogonal clipping', (layout) => {
+    setLayout(layout);
+    document.body.innerHTML = '';
+    const svg = select(document.body).append('svg');
+    const clippedStart = { x: -5, y: -5 };
+    const clippedEnd = { x: 25, y: 45 };
+
+    insertEdge(
+      svg,
+      makeEdge({ curve: 'linear', skipCornerFix: true }),
+      null,
+      'flowchart-v2',
+      { intersect: vi.fn(() => clippedStart) },
+      { intersect: vi.fn(() => clippedEnd) },
+      'diagram'
+    );
+
+    expect(JSON.parse(atob(svg.select('path').attr('data-points')))).toEqual([
+      clippedStart,
+      points[1],
+      points[2],
+      clippedEnd,
+    ]);
+  });
+});
+
 describe('computeLabelTransform', () => {
   it('accounts for bbox.x/y offsets when centering SVG label (htmlLabels: false)', () => {
     // bbox.x = -2 simulates the 2px padding of the background <rect> added by
@@ -328,6 +425,44 @@ describe('insertEdge orthogonal endpoint clipping', () => {
       { x: 50, y: 15 },
       { x: 110, y: 15 },
     ]);
+  });
+
+  it('skips grid endpoint clipping when skipIntersect is true', () => {
+    vi.mocked(getConfig).mockReturnValue({
+      layout: 'grid',
+      flowchart: { curve: 'rounded', arrowMarkerAbsolute: false },
+      state: { arrowMarkerAbsolute: false },
+      handDrawnSeed: 0,
+    });
+    document.body.innerHTML = '';
+    const svg = select(document.body).append('svg');
+    const points = [
+      { x: 0, y: 10 },
+      { x: 100, y: 10 },
+    ];
+    const edge = {
+      id: 'skipped-grid-clipping',
+      cssCompiledStyles: {},
+      style: [],
+      thickness: 'normal',
+      pattern: 'solid',
+      classes: 'flowchart-link',
+      curve: 'linear',
+      look: 'classic',
+      arrowTypeStart: 'none',
+      arrowTypeEnd: 'arrow_point',
+      portClipping: 'outline-orthogonal',
+      skipCornerFix: true,
+      points,
+    };
+    const tail = { intersect: vi.fn(() => ({ x: -10, y: 5 })) };
+    const head = { intersect: vi.fn(() => ({ x: 110, y: 15 })) };
+
+    insertEdge(svg, edge, null, 'flowchart-v2', tail, head, 'diagram', true);
+
+    expect(tail.intersect).not.toHaveBeenCalled();
+    expect(head.intersect).not.toHaveBeenCalled();
+    expect(JSON.parse(atob(svg.select('path').attr('data-points')))).toEqual(points);
   });
 });
 
