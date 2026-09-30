@@ -2,6 +2,7 @@ import type { MermaidConfig } from '../../../config.type.js';
 import type { GridHorizontalAlign, GridPlacement, GridVerticalAlign } from '../../../types.js';
 import type { LayoutData, Node } from '../../types.js';
 import type { Point } from '../../../types.js';
+import { DEFAULT_EDGE_CORNER_RADIUS } from '../../edgeCornerRadius.js';
 import type { GridRoutingInstrumentation } from './routerInstrumentation.js';
 
 export const ROOT_CONTAINER_ID = '__grid_root__';
@@ -268,7 +269,7 @@ export const GRID_DEFAULTS = {
   horizontalAlign: 'center' as GridHorizontalAlign,
   verticalAlign: 'center' as GridVerticalAlign,
   curve: 'rounded' as GridCurve,
-  edgeCornerRadius: 5,
+  edgeCornerRadius: DEFAULT_EDGE_CORNER_RADIUS,
 };
 
 export type GridLayoutData = LayoutData & {

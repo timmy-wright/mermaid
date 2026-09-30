@@ -29,6 +29,7 @@ import {
   select,
 } from 'd3';
 import rough from 'roughjs';
+import { resolveEdgeCornerRadius } from '../edgeCornerRadius.js';
 import createLabel from './createLabel.js';
 import { addEdgeMarkers } from './edgeMarker.ts';
 import { clipOrthogonalEndpointsToNodeOutlines } from './orthogonalEdgeClipping.js';
@@ -45,11 +46,7 @@ export const resolveEdgeCurveType = (edgeCurve) => {
   return typeof edgeCurve === 'string' ? edgeCurve : getConfig()?.flowchart?.curve;
 };
 
-export const resolveEdgeCornerRadius = (cornerRadius) => {
-  return typeof cornerRadius === 'number' && Number.isFinite(cornerRadius) && cornerRadius >= 0
-    ? cornerRadius
-    : 5;
-};
+export { resolveEdgeCornerRadius };
 
 export const edgeLabels = new Map();
 export const terminalLabels = new Map();

@@ -1,5 +1,6 @@
 import { log } from '../../../logger.js';
 import type { GridPlacement } from '../../../types.js';
+import { resolveEdgeCornerRadius } from '../../edgeCornerRadius.js';
 import type { Node } from '../../types.js';
 import {
   GRID_DEFAULTS,
@@ -135,12 +136,7 @@ export function readGridConfig(data: GridLayoutData): GridLayoutConfigNormalized
       typeof raw.curve === 'string' && GRID_CURVES.has(raw.curve as GridCurve)
         ? (raw.curve as GridCurve)
         : GRID_DEFAULTS.curve,
-    edgeCornerRadius:
-      typeof raw.edgeCornerRadius === 'number' &&
-      Number.isFinite(raw.edgeCornerRadius) &&
-      raw.edgeCornerRadius >= 0
-        ? raw.edgeCornerRadius
-        : GRID_DEFAULTS.edgeCornerRadius,
+    edgeCornerRadius: resolveEdgeCornerRadius(raw.edgeCornerRadius),
   };
 }
 
