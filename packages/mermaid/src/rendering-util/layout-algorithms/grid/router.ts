@@ -18,6 +18,7 @@ import {
   restoreGridRoutingInstrumentationCheckpoint,
   type GridRoutingFallbackReason,
   type GridRoutingInstrumentation,
+  type GridRoutingInstrumentationCheckpoint,
 } from './routerInstrumentation.js';
 import {
   compareTupleCost,
@@ -98,6 +99,83 @@ interface EdgeRoutePlan {
   laneOffset: number;
   bundleSize: number;
   pairKey: string;
+}
+
+interface BundleEdgeCheckpoint {
+  edge: Edge;
+  points: Edge['points'];
+  curve: Edge['curve'];
+  cornerRadius: Edge['cornerRadius'];
+}
+
+interface BundleCheckpoint {
+  pairKey: string;
+  pairRoutes: Point[][] | undefined;
+  pairedPortals: Map<string, PairedPortal>;
+  demandCoords: Map<string, number>;
+  edges: BundleEdgeCheckpoint[];
+  instrumentedRoutesLength: number | undefined;
+  metrics: GridRoutingInstrumentationCheckpoint | undefined;
+}
+
+function createBundleCheckpoint(
+  pairPlans: readonly EdgeRoutePlan[],
+  pairRoutes: ReadonlyMap<string, Point[][]>,
+  pairedPortals: ReadonlyMap<string, PairedPortal>,
+  demandCoords: ReadonlyMap<string, number>,
+  instrumentedRoutes: readonly Point[][] | undefined,
+  metrics: GridRoutingInstrumentation | undefined
+): BundleCheckpoint {
+  const pairKey = pairPlans[0].pairKey;
+  const committedPairRoutes = pairRoutes.get(pairKey);
+  return {
+    pairKey,
+    pairRoutes: committedPairRoutes ? [...committedPairRoutes] : undefined,
+    pairedPortals: new Map(pairedPortals),
+    demandCoords: new Map(demandCoords),
+    edges: pairPlans.map(({ edge }) => ({
+      edge,
+      points: edge.points,
+      curve: edge.curve,
+      cornerRadius: edge.cornerRadius,
+    })),
+    instrumentedRoutesLength: instrumentedRoutes?.length,
+    metrics: metrics ? createGridRoutingInstrumentationCheckpoint(metrics) : undefined,
+  };
+}
+
+function restoreBundleCheckpoint(
+  checkpoint: BundleCheckpoint,
+  pairRoutes: Map<string, Point[][]>,
+  pairedPortals: Map<string, PairedPortal>,
+  demandCoords: Map<string, number>,
+  instrumentedRoutes: Point[][] | undefined,
+  metrics: GridRoutingInstrumentation | undefined
+): void {
+  if (checkpoint.pairRoutes) {
+    pairRoutes.set(checkpoint.pairKey, [...checkpoint.pairRoutes]);
+  } else {
+    pairRoutes.delete(checkpoint.pairKey);
+  }
+  pairedPortals.clear();
+  for (const [key, portal] of checkpoint.pairedPortals) {
+    pairedPortals.set(key, portal);
+  }
+  demandCoords.clear();
+  for (const [key, coordinate] of checkpoint.demandCoords) {
+    demandCoords.set(key, coordinate);
+  }
+  for (const edgeCheckpoint of checkpoint.edges) {
+    edgeCheckpoint.edge.points = edgeCheckpoint.points;
+    edgeCheckpoint.edge.curve = edgeCheckpoint.curve;
+    edgeCheckpoint.edge.cornerRadius = edgeCheckpoint.cornerRadius;
+  }
+  if (instrumentedRoutes && checkpoint.instrumentedRoutesLength !== undefined) {
+    instrumentedRoutes.length = checkpoint.instrumentedRoutesLength;
+  }
+  if (metrics && checkpoint.metrics) {
+    restoreGridRoutingInstrumentationCheckpoint(metrics, checkpoint.metrics);
+  }
 }
 
 function ownerGroupTitle(node: Node): boolean {
@@ -3218,45 +3296,14 @@ export function routeGridEdges(
     // A bundle is the retry unit because earlier siblings reserve pair corridors and portals for
     // later ones. Restore every shared structure before changing route order or the retry becomes
     // biased.
-    const portalSnapshot = new Map(pairedPortals);
-    const demandSnapshot = new Map(demandCoords);
-    const edgeSnapshot = new Map(
-      pairPlans.map(({ edge }) => [
-        edge.id,
-        {
-          points: edge.points,
-          curve: edge.curve,
-          cornerRadius: edge.cornerRadius,
-        },
-      ])
+    const checkpoint = createBundleCheckpoint(
+      pairPlans,
+      pairRoutes,
+      pairedPortals,
+      demandCoords,
+      instrumentedRoutes,
+      metrics
     );
-    const instrumentedLength = instrumentedRoutes?.length ?? 0;
-    const metricSnapshot = metrics
-      ? createGridRoutingInstrumentationCheckpoint(metrics)
-      : undefined;
-    const restorePairState = (): void => {
-      pairRoutes.delete(pairPlans[0].pairKey);
-      pairedPortals.clear();
-      for (const [key, portal] of portalSnapshot) {
-        pairedPortals.set(key, portal);
-      }
-      demandCoords.clear();
-      for (const [key, coordinate] of demandSnapshot) {
-        demandCoords.set(key, coordinate);
-      }
-      for (const { edge } of pairPlans) {
-        const snapshot = edgeSnapshot.get(edge.id)!;
-        edge.points = snapshot.points;
-        edge.curve = snapshot.curve;
-        edge.cornerRadius = snapshot.cornerRadius;
-      }
-      if (instrumentedRoutes) {
-        instrumentedRoutes.length = instrumentedLength;
-      }
-      if (metrics && metricSnapshot) {
-        restoreGridRoutingInstrumentationCheckpoint(metrics, metricSnapshot);
-      }
-    };
 
     let initialError: unknown;
     try {
@@ -3266,7 +3313,14 @@ export function routeGridEdges(
       continue;
     } catch (error) {
       initialError = error;
-      restorePairState();
+      restoreBundleCheckpoint(
+        checkpoint,
+        pairRoutes,
+        pairedPortals,
+        demandCoords,
+        instrumentedRoutes,
+        metrics
+      );
       if (metrics) {
         metrics.bundleRetryAttempts++;
       }
@@ -3291,7 +3345,14 @@ export function routeGridEdges(
         continue;
       } catch (error) {
         retryError = error;
-        restorePairState();
+        restoreBundleCheckpoint(
+          checkpoint,
+          pairRoutes,
+          pairedPortals,
+          demandCoords,
+          instrumentedRoutes,
+          metrics
+        );
       }
       if (!isPairSeparationError(initialError) || !isPairSeparationError(retryError)) {
         throw initialError;
