@@ -16,6 +16,48 @@ The calculated route is an orthogonal polyline made from horizontal and vertical
 
 Grid cells are placement regions, not obstacles. An edge can cross an unused part of a cell as long as it does not cross protected node or group geometry.
 
+## Routing algorithms and migration status
+
+Grid routing currently combines a deterministic corridor router with a sparse visibility router.
+Both are production paths.
+
+For an ordinary unbundled edge whose endpoints share a container, Mermaid first considers the
+corridor route. It uses that route only when:
+
+- the selected endpoint ports are legal
+- the complete route passes measured-geometry validation
+- the route length equals the Manhattan lower bound between those ports
+
+In that case, sparse search cannot produce a shorter route, so Mermaid avoids building a visibility
+topology and running A\*. If any condition fails, the edge uses sparse visibility routing instead.
+Self-loops and parallel or reverse bundles also use sparse routing.
+
+Hierarchy routing is partially migrated. Bundles, hierarchy edges whose endpoints have no unrelated
+incident edges, and plans whose corridor route fails validation use sparse routing through every
+group-boundary segment. A single hierarchy edge can still use validated corridor segments when at
+least one endpoint is shared with another edge. For an edge between a group and one of its
+descendants, the segment in the lowest common ancestor uses sparse routing even when an ascent or
+descent segment still uses corridor routing.
+
+The corridor router also remains the fallback for defined sparse topology and search resource
+limits. Mermaid commits that fallback only when it passes route validation; an unchecked route is
+never returned.
+
+Test-only topology caps, search caps, and dual-route comparison disable the ordinary fast path so
+those tests exercise sparse topology, search, and fallback behavior. Normal routing and performance
+tests exercise the production fast path separately.
+
+Removing the corridor router requires more than replacing its call sites. Sparse routing must first:
+
+- route the remaining shared-endpoint hierarchy cases without introducing shared route segments or
+  crossings
+- meet the large-diagram performance target without the ordinary-edge fast path
+- pass generated nested-hierarchy, label, self-loop, bundle, and fallback coverage
+- complete release-level route and performance validation
+
+After those gates hold, the corridor router, corridor metadata, resource fallback, compatibility
+instrumentation, and obsolete tests can be removed together.
+
 ## Nested groups
 
 For an edge that crosses a group boundary, the router selects a legal crossing point that avoids the group title and corners. An edge that crosses several nested groups is assembled from routes within each group.

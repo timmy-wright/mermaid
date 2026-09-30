@@ -2564,9 +2564,38 @@ export function routeGridEdges(
     const attachments = compatibilityLcaAttachments(plan);
     return segmentIsValid(plan.lcaContainerId, attachments.start, attachments.end);
   };
+
+  /*
+   * Grid routing currently uses two algorithms:
+   *
+   * - `routeWithinContainer()` is the deterministic corridor router. During normal rendering, an
+   *   ordinary unbundled same-container edge uses it as a fast path when its endpoint ports are
+   *   legal, the complete route passes measured-geometry validation, and its length equals the
+   *   Manhattan lower bound. This avoids building a visibility topology and running A* for routes
+   *   that sparse search cannot improve.
+   * - The sparse visibility router handles self-loops, bundles, ordinary routes that fail the fast
+   *   path, and hierarchy routes that need alternative portals or obstacle-aware search.
+   *
+   * Test-only topology/search caps and dual-route comparison disable the fast path intentionally:
+   * those modes must exercise sparse topology, search, and fallback behavior. Normal router and
+   * performance tests cover the production fast path separately.
+   *
+   * Hierarchy routing is still partially migrated. Bundles, routes whose two endpoints have no
+   * unrelated incident edges, and plans whose corridor route fails validation use sparse routing
+   * for every hierarchy-chain segment. Other single hierarchy edges may retain validated corridor
+   * segments when at least one endpoint is shared with another edge. Group-to-descendant routes
+   * always use sparse routing for their LCA segment, even when their ascent or descent chain still
+   * uses corridor routing. Defined sparse resource-limit failures also use the corridor route as a
+   * fallback, but only after that route passes the same geometry and pair-separation validation.
+   *
+   * Finishing the migration requires sparse routing to handle the remaining mixed-demand
+   * hierarchy segments without introducing shared subpaths or crossings, and to meet the large
+   * graph performance target without the common-edge fast path. It also requires generated nested
+   * hierarchy, label, loop, bundle, and fallback coverage plus release-level validation. Only then
+   * can `routeWithinContainer()`, corridor metadata, compatibility/fallback instrumentation, and
+   * their obsolete tests be removed.
+   */
   const compatibilityFastRoutes = new Map<string, Point[]>();
-  // Diagnostic caps and dual-route comparison must exercise the sparse router. In normal
-  // rendering, reuse a validated Manhattan-minimal legacy route to avoid building topology.
   const compatibilityFastPathEnabled =
     options.topologyCaps === undefined &&
     options.searchCaps === undefined &&
