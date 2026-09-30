@@ -117,25 +117,30 @@ export const gridRoutingMetricDisposition = {
   routes: 'transactional',
 } as const satisfies Record<keyof GridRoutingInstrumentation, 'transactional' | 'cumulative'>;
 
+type TransactionalGridRoutingMetric = {
+  [K in keyof typeof gridRoutingMetricDisposition]: (typeof gridRoutingMetricDisposition)[K] extends 'transactional'
+    ? K
+    : never;
+}[keyof typeof gridRoutingMetricDisposition];
+
+type TransactionalGridRoutingValueMetric = Exclude<
+  TransactionalGridRoutingMetric,
+  'routeOrder' | 'routes'
+>;
+
+const transactionalGridRoutingValueMetrics = (
+  Object.keys(gridRoutingMetricDisposition) as (keyof GridRoutingInstrumentation)[]
+).filter(
+  (key): key is TransactionalGridRoutingValueMetric =>
+    gridRoutingMetricDisposition[key] === 'transactional' &&
+    key !== 'routeOrder' &&
+    key !== 'routes'
+);
+
 export interface GridRoutingInstrumentationCheckpoint {
   routeOrderLength: number;
   routesLength: number;
-  values: Pick<
-    GridRoutingInstrumentation,
-    | 'hierarchyPortalPairs'
-    | 'hierarchyPortalTransitionLength'
-    | 'hierarchyPortalAlternativeSelections'
-    | 'hierarchyBoundaryTransitions'
-    | 'routesFound'
-    | 'routesImpossible'
-    | 'compatibilitySegments'
-    | 'compatibilityRecoveries'
-    | 'bundleSeparationRelaxations'
-    | 'routeLength'
-    | 'bendCount'
-    | 'crossingCount'
-    | 'sharedLength'
-  >;
+  values: Pick<GridRoutingInstrumentation, TransactionalGridRoutingValueMetric>;
 }
 
 export function createGridRoutingInstrumentationCheckpoint(
@@ -144,21 +149,9 @@ export function createGridRoutingInstrumentationCheckpoint(
   return {
     routeOrderLength: metrics.routeOrder.length,
     routesLength: metrics.routes.length,
-    values: {
-      hierarchyPortalPairs: metrics.hierarchyPortalPairs,
-      hierarchyPortalTransitionLength: metrics.hierarchyPortalTransitionLength,
-      hierarchyPortalAlternativeSelections: metrics.hierarchyPortalAlternativeSelections,
-      hierarchyBoundaryTransitions: metrics.hierarchyBoundaryTransitions,
-      routesFound: metrics.routesFound,
-      routesImpossible: metrics.routesImpossible,
-      compatibilitySegments: metrics.compatibilitySegments,
-      compatibilityRecoveries: metrics.compatibilityRecoveries,
-      bundleSeparationRelaxations: metrics.bundleSeparationRelaxations,
-      routeLength: metrics.routeLength,
-      bendCount: metrics.bendCount,
-      crossingCount: metrics.crossingCount,
-      sharedLength: metrics.sharedLength,
-    },
+    values: Object.fromEntries(
+      transactionalGridRoutingValueMetrics.map((key) => [key, metrics[key]])
+    ) as GridRoutingInstrumentationCheckpoint['values'],
   };
 }
 

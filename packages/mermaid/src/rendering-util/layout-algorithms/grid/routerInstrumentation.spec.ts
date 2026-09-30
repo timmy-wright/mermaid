@@ -26,6 +26,18 @@ describe('grid routing instrumentation checkpoints', () => {
       Object.keys(createGridRoutingInstrumentation()).sort()
     );
     expect(gridRoutingMetricDisposition.compatibilityFastPaths).toBe('cumulative');
+
+    const checkpoint = createGridRoutingInstrumentationCheckpoint(
+      createGridRoutingInstrumentation()
+    );
+    const transactionalValueMetrics = Object.entries(gridRoutingMetricDisposition)
+      .filter(
+        ([key, disposition]) =>
+          disposition === 'transactional' && key !== 'routeOrder' && key !== 'routes'
+      )
+      .map(([key]) => key)
+      .sort();
+    expect(Object.keys(checkpoint.values).sort()).toEqual(transactionalValueMetrics);
   });
 
   it('restores committed output while preserving work performed', () => {
