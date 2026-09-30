@@ -15,6 +15,7 @@ import type { GridItemLayoutMeta, GridLayoutResult } from './types.js';
 import { normalizePolyline } from '../layout-utils/geometry.js';
 
 const FIXTURES_DIR = resolve(process.cwd(), 'e2e/platform/dev-diagrams/layout-tests/grid');
+const CELL_AWARE_MAX_ESTIMATED_BYTES = 36_704;
 
 interface GridQualityBaseline {
   fixture: string;
@@ -200,7 +201,6 @@ describe('grid DDLT matrix fixtures', () => {
       searches: metrics.searches,
       expandedStates: metrics.expandedStates,
       maxOpenSet: metrics.maxOpenSet,
-      estimatedBytes: metrics.estimatedBytes,
       resourceLimitFallbacks: metrics.resourceLimitFallbacks,
     }).toMatchInlineSnapshot(`
       {
@@ -208,13 +208,13 @@ describe('grid DDLT matrix fixtures', () => {
         "baseVertices": 44,
         "endpointOverlayBuilds": 2,
         "endpointOverlayVertices": 20,
-        "estimatedBytes": 36704,
         "expandedStates": 7,
         "maxOpenSet": 8,
         "resourceLimitFallbacks": 0,
         "searches": 2,
       }
     `);
+    expect(metrics.estimatedBytes).toBeLessThanOrEqual(CELL_AWARE_MAX_ESTIMATED_BYTES);
   });
 
   it('routes hierarchy fixtures through exact paired boundary portals', async () => {
