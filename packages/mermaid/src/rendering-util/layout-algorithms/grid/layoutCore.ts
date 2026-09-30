@@ -48,11 +48,15 @@ function titleBandFor(node: Node, titleGap: number): number {
 
 function ensureMeasuredNode(node: Node): void {
   if (!isFinitePositiveNumber(node.width) || !isFinitePositiveNumber(node.height)) {
-    throw gridError('GRID_MISSING_MEASUREMENT', `Node "${node.id}" is missing size`, {
-      nodeId: node.id,
-      width: node.width,
-      height: node.height,
-    });
+    throw gridError(
+      'GRID_MISSING_MEASUREMENT',
+      `Node "${node.id}" must have width and height greater than 0 (width: ${node.width}, height: ${node.height})`,
+      {
+        nodeId: node.id,
+        width: node.width,
+        height: node.height,
+      }
+    );
   }
 }
 

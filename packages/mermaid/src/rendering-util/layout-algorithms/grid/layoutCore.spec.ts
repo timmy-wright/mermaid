@@ -249,6 +249,17 @@ describe('grid layout core', () => {
     expect(geometrySnapshot(data.nodes)).toEqual(before);
   });
 
+  it.each([
+    { id: 'zero-width', width: 0, height: 20 },
+    { id: 'zero-height', width: 40, height: 0 },
+  ])('reports the positive-size requirement for $id nodes', ({ id, width, height }) => {
+    const data = layout([leaf(id, width, height)]);
+
+    expect(() => runGridLayoutCore(data)).toThrow(
+      `GRID_MISSING_MEASUREMENT: Node "${id}" must have width and height greater than 0 (width: ${width}, height: ${height})`
+    );
+  });
+
   it('lays out 15,000 nested groups without recursion overflow', () => {
     const depth = 15_000;
     const nodes: Node[] = [group('g0', 'Group 0')];
