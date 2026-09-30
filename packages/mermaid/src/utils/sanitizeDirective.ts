@@ -56,12 +56,7 @@ const sanitizeGridPlacements = (dict: Record<string, unknown>): void => {
   }
 };
 
-/**
- * Sanitizes directive objects
- *
- * @param args - Directive's JSON
- */
-export const sanitizeDirective = (args: any): void => {
+const sanitizeDirectiveValue = (args: any, parentKey?: string): void => {
   log.debug('sanitizeDirective called with', args);
 
   // Return if not an object
@@ -71,7 +66,7 @@ export const sanitizeDirective = (args: any): void => {
 
   // Sanitize each element if an array
   if (Array.isArray(args)) {
-    args.forEach((arg) => sanitizeDirective(arg));
+    args.forEach((arg) => sanitizeDirectiveValue(arg, parentKey));
     return;
   }
 
@@ -96,11 +91,11 @@ export const sanitizeDirective = (args: any): void => {
       const valuePattern = DICTIONARY_CONFIG_PATTERNS[key];
       if (valuePattern) {
         sanitizeDictionaryConfig(args[key], valuePattern);
-      } else if (key === 'placements') {
+      } else if (parentKey === 'grid' && key === 'placements') {
         sanitizeGridPlacements(args[key]);
       } else {
         log.debug('sanitizing object', key);
-        sanitizeDirective(args[key]);
+        sanitizeDirectiveValue(args[key], key);
       }
       continue;
     }
@@ -123,6 +118,15 @@ export const sanitizeDirective = (args: any): void => {
     }
   }
   log.debug('After sanitization', args);
+};
+
+/**
+ * Sanitizes directive objects
+ *
+ * @param args - Directive's JSON
+ */
+export const sanitizeDirective = (args: any): void => {
+  sanitizeDirectiveValue(args);
 };
 
 export const sanitizeCss = (str: string): string => {

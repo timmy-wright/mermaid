@@ -102,5 +102,17 @@ describe('sanitizeDirective', () => {
       sanitizeDirective(args);
       expect(args.grid.placements).toEqual({ valid: { row: 1 } });
     });
+
+    it('does not apply grid placement sanitization outside grid config', () => {
+      const args = {
+        flowchart: {
+          placements: {
+            protocolGateway: { row: 1 },
+          },
+        },
+      };
+      sanitizeDirective(args);
+      expect(args.flowchart.placements).toEqual({});
+    });
   });
 });
