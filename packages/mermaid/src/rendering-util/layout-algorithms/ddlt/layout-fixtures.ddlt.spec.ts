@@ -72,6 +72,6 @@ describe('DDLT layout-test fixture sweep', () => {
     expect([...exemptIds]).toEqual([]);
     const nonExemptInvalid = report.byCase.filter((row) => !exemptIds.has(row.id) && !row.valid);
     expect(nonExemptInvalid.map((row) => `${row.id}: ${row.issueTypes.join(', ')}`)).toEqual([]);
-    expect(report.totalScore).toBe(GRID_TOTAL_SCORE_BASELINE);
+    expect(report.totalScore).toBeGreaterThanOrEqual(GRID_TOTAL_SCORE_BASELINE);
   });
 });

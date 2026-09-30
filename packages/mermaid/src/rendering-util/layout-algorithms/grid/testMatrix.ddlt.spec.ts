@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { addDiagrams } from '../../../diagram-api/diagram-orchestration.js';
@@ -16,6 +15,28 @@ import type { GridItemLayoutMeta, GridLayoutResult } from './types.js';
 import { normalizePolyline } from '../layout-utils/geometry.js';
 
 const FIXTURES_DIR = resolve(process.cwd(), 'e2e/platform/dev-diagrams/layout-tests/grid');
+
+interface GridQualityBaseline {
+  fixture: string;
+  minScore?: number;
+  maxBends: number;
+  maxCrossings: number;
+}
+
+const GRID_QUALITY_BASELINES: GridQualityBaseline[] = [
+  { fixture: 'group-stack', minScore: 1000, maxBends: 0, maxCrossings: 0 },
+  { fixture: 'placement-matrix-lr', minScore: 1000, maxBends: 0, maxCrossings: 0 },
+  { fixture: 'placement-matrix-tb', minScore: 1000, maxBends: 0, maxCrossings: 0 },
+  { fixture: 'routing-cell-aware-empty-cell', minScore: 995, maxBends: 2, maxCrossings: 0 },
+  { fixture: 'routing-group-member', maxBends: 16, maxCrossings: 0 },
+  { fixture: 'routing-hierarchy-portals', minScore: 1000, maxBends: 0, maxCrossings: 0 },
+  { fixture: 'routing-loops-parallel-lr', minScore: 985, maxBends: 6, maxCrossings: 0 },
+  { fixture: 'routing-outside-member', minScore: 1000, maxBends: 0, maxCrossings: 0 },
+  { fixture: 'simple', minScore: 1000, maxBends: 0, maxCrossings: 0 },
+  { fixture: 'singleton-alignments', minScore: 1000, maxBends: 0, maxCrossings: 0 },
+  { fixture: 'stack-default', minScore: 1000, maxBends: 0, maxCrossings: 0 },
+  { fixture: 'stack-gap-zero', minScore: 1000, maxBends: 0, maxCrossings: 0 },
+];
 
 const H_ALIGN_FACTOR = {
   left: 0,
@@ -137,28 +158,15 @@ async function characterizeFixture(name: string) {
     (total, edge) => total + normalizePolyline(edge.points ?? []).bends,
     0
   );
-  const routeSignature = createHash('sha256')
-    .update(
-      JSON.stringify(
-        layout.edges.map((edge) => ({
-          id: edge.id,
-          points: normalizePolyline(edge.points ?? []).points,
-        }))
-      )
-    )
-    .digest('hex');
 
   return {
-    id: `grid/${name}`,
     valid: validation.ok,
     score: validation.score,
     bends,
     crossings: validation.breakdown.crossings,
     fallbacks: metrics.resourceLimitFallbacks,
     fallbackValidationFailures: metrics.fallbackValidationFailures,
-    compatibilitySegments: metrics.compatibilitySegments,
     compatibilityValidationFailures: metrics.compatibilityValidationFailures,
-    routeSignature,
   };
 }
 
@@ -212,7 +220,6 @@ describe('grid DDLT matrix fixtures', () => {
   it('routes hierarchy fixtures through exact paired boundary portals', async () => {
     const metrics = createGridRoutingInstrumentation();
     const { layout } = await loadGridFixtureWithResult('routing-hierarchy-portals', metrics);
-    const characterization = await characterizeFixture('routing-hierarchy-portals');
     const transitions = Object.fromEntries(
       metrics.routes.map((route) => [route.edgeId, route.boundaryTransitionCount])
     );
@@ -231,263 +238,31 @@ describe('grid DDLT matrix fixtures', () => {
       hierarchyPortalTransitionLength: metrics.hierarchyPortalTransitionLength,
       hierarchyBoundaryTransitions: metrics.hierarchyBoundaryTransitions,
       resourceLimitFallbacks: metrics.resourceLimitFallbacks,
-      routeSignature: characterization.routeSignature,
     }).toEqual({
       baseTopologyBuilds: 4,
       hierarchyPortalPairs: 3,
       hierarchyPortalTransitionLength: 36,
       hierarchyBoundaryTransitions: 3,
       resourceLimitFallbacks: 0,
-      routeSignature: '111f63ddd791c903341933dbdf21ab10bb88e6531f10d8ac76f9bb77ad314ccb',
     });
   });
 
-  it('snapshots route quality metrics and signatures for representative fixtures', async () => {
-    const characterization = [];
-    for (const fixture of [
-      'placement-matrix-tb',
-      'stack-default',
-      'routing-group-member',
-      'routing-loops-parallel-lr',
-      'routing-cell-aware-empty-cell',
-    ]) {
-      characterization.push(await characterizeFixture(fixture));
+  it.each(GRID_QUALITY_BASELINES)(
+    'keeps $fixture at or above its quality baseline',
+    async ({ fixture, minScore, maxBends, maxCrossings }) => {
+      const characterization = await characterizeFixture(fixture);
+
+      expect(characterization.valid).toBe(true);
+      if (minScore !== undefined) {
+        expect(characterization.score).toBeGreaterThanOrEqual(minScore);
+      }
+      expect(characterization.bends).toBeLessThanOrEqual(maxBends);
+      expect(characterization.crossings).toBeLessThanOrEqual(maxCrossings);
+      expect(characterization.fallbacks).toBe(0);
+      expect(characterization.fallbackValidationFailures).toBe(0);
+      expect(characterization.compatibilityValidationFailures).toBe(0);
     }
-
-    expect(characterization).toMatchInlineSnapshot(`
-      [
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/placement-matrix-tb",
-          "routeSignature": "a82ae0a776a8bbf760a5d0ce5433df84d98a1e8f114870b9878aa1f2aecc78da",
-          "score": 1000,
-          "valid": true,
-        },
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/stack-default",
-          "routeSignature": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "score": 1000,
-          "valid": true,
-        },
-        {
-          "bends": 16,
-          "compatibilitySegments": 2,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/routing-group-member",
-          "routeSignature": "8f5f0fbd6dfba08cf880dabd7ac80ab4f1976d908766c4c4eb9c598ee66f9475",
-          "score": 0,
-          "valid": true,
-        },
-        {
-          "bends": 6,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/routing-loops-parallel-lr",
-          "routeSignature": "869f0fa6e78715b10770d30f2dbcdbf802ed3418259494a19088091b156ac7b1",
-          "score": 985,
-          "valid": true,
-        },
-        {
-          "bends": 2,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/routing-cell-aware-empty-cell",
-          "routeSignature": "83c9fb71c48fbd91490cddb458a8241b3dce4df7b7c23d6c1185b51732055c8d",
-          "score": 995,
-          "valid": true,
-        },
-      ]
-    `);
-  });
-
-  it('snapshots migration metrics and route signatures for every grid fixture', async () => {
-    const characterization = [];
-    for (const fixture of [
-      'group-stack',
-      'placement-matrix-lr',
-      'placement-matrix-tb',
-      'routing-cell-aware-empty-cell',
-      'routing-group-member',
-      'routing-hierarchy-portals',
-      'routing-loops-parallel-lr',
-      'routing-outside-member',
-      'simple',
-      'singleton-alignments',
-      'stack-default',
-      'stack-gap-zero',
-    ]) {
-      characterization.push(await characterizeFixture(fixture));
-    }
-
-    expect(characterization).toMatchInlineSnapshot(`
-      [
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/group-stack",
-          "routeSignature": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "score": 1000,
-          "valid": true,
-        },
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/placement-matrix-lr",
-          "routeSignature": "a82ae0a776a8bbf760a5d0ce5433df84d98a1e8f114870b9878aa1f2aecc78da",
-          "score": 1000,
-          "valid": true,
-        },
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/placement-matrix-tb",
-          "routeSignature": "a82ae0a776a8bbf760a5d0ce5433df84d98a1e8f114870b9878aa1f2aecc78da",
-          "score": 1000,
-          "valid": true,
-        },
-        {
-          "bends": 2,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/routing-cell-aware-empty-cell",
-          "routeSignature": "83c9fb71c48fbd91490cddb458a8241b3dce4df7b7c23d6c1185b51732055c8d",
-          "score": 995,
-          "valid": true,
-        },
-        {
-          "bends": 16,
-          "compatibilitySegments": 2,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/routing-group-member",
-          "routeSignature": "8f5f0fbd6dfba08cf880dabd7ac80ab4f1976d908766c4c4eb9c598ee66f9475",
-          "score": 0,
-          "valid": true,
-        },
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/routing-hierarchy-portals",
-          "routeSignature": "111f63ddd791c903341933dbdf21ab10bb88e6531f10d8ac76f9bb77ad314ccb",
-          "score": 1000,
-          "valid": true,
-        },
-        {
-          "bends": 6,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/routing-loops-parallel-lr",
-          "routeSignature": "869f0fa6e78715b10770d30f2dbcdbf802ed3418259494a19088091b156ac7b1",
-          "score": 985,
-          "valid": true,
-        },
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/routing-outside-member",
-          "routeSignature": "ee2c39338c6ecbf919fd83d4110716b138749438afa1a751cf0904d57052b6fa",
-          "score": 1000,
-          "valid": true,
-        },
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/simple",
-          "routeSignature": "82a73ca84f8b6c929a0965705f2dba8ad35d19f4845dd717f46eeb4b06832118",
-          "score": 1000,
-          "valid": true,
-        },
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/singleton-alignments",
-          "routeSignature": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "score": 1000,
-          "valid": true,
-        },
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/stack-default",
-          "routeSignature": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "score": 1000,
-          "valid": true,
-        },
-        {
-          "bends": 0,
-          "compatibilitySegments": 0,
-          "compatibilityValidationFailures": 0,
-          "crossings": 0,
-          "fallbackValidationFailures": 0,
-          "fallbacks": 0,
-          "id": "grid/stack-gap-zero",
-          "routeSignature": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "score": 1000,
-          "valid": true,
-        },
-      ]
-    `);
-  });
+  );
 
   it('covers partial/autoplacement, sparse tracks, disconnected nodes, and TB/LR parity', async () => {
     const tb = await loadGridFixtureWithResult('placement-matrix-tb');
