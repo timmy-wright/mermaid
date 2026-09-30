@@ -3165,26 +3165,47 @@ function routeGridPlan(
 }
 
 class GridEdgeRoutingSession {
-  private readonly prepared: PreparedEdgeRoutes;
-  private readonly modes: PreparedRoutingModes;
-  private readonly routingContext: GridRoutingContext;
+  private prepared!: PreparedEdgeRoutes;
+  private modes!: PreparedRoutingModes;
+  private routingContext!: GridRoutingContext;
   private readonly searchWorkspace = new RouterSearchWorkspace();
-  private readonly endpointOverlayScratch: Map<GridContainerId, EndpointOverlayScratch>;
+  private endpointOverlayScratch!: Map<GridContainerId, EndpointOverlayScratch>;
   private readonly pairedPortals = new Map<string, PairedPortal>();
   private readonly ownerSideCounts = new Map<string, number>();
-  private readonly instrumentedRoutes: Point[][] | undefined;
+  private instrumentedRoutes!: Point[][] | undefined;
   private readonly selfLoopCounts = new Map<string, number>();
   private readonly pairRoutes = new Map<string, Point[][]>();
-  private readonly routePlanState: RouteGridPlanContext;
+  private routePlanState!: RouteGridPlanContext;
+  private routed = false;
 
   constructor(
-    layout: LayoutData,
+    private readonly layout: LayoutData,
     private readonly result: GridLayoutResult,
     private readonly metrics: GridRoutingInstrumentation | undefined,
     private readonly options: GridRoutingOptions
-  ) {
-    rootContainerMeta(result);
-    this.prepared = prepareEdgeRoutes(layout, result);
+  ) {}
+
+  route(): void {
+    if (this.routed) {
+      throw new Error('Grid edge routing session can only be run once');
+    }
+    this.routed = true;
+    this.prepare();
+
+    const plansByPair = new Map<string, EdgeRoutePlan[]>();
+    for (const plan of this.prepared.orderedPlans) {
+      const pairPlans = plansByPair.get(plan.pairKey) ?? [];
+      pairPlans.push(plan);
+      plansByPair.set(plan.pairKey, pairPlans);
+    }
+    for (const pairPlans of plansByPair.values()) {
+      this.routeBundle(pairPlans);
+    }
+  }
+
+  private prepare(): void {
+    rootContainerMeta(this.result);
+    this.prepared = prepareEdgeRoutes(this.layout, this.result);
 
     /*
      * Grid routing currently uses two algorithms:
@@ -3217,12 +3238,12 @@ class GridEdgeRoutingSession {
      * Only then can `routeWithinContainer()`, corridor metadata, compatibility/fallback
      * instrumentation, and their obsolete tests be removed.
      */
-    this.modes = prepareRoutingModes(this.prepared, result, metrics, options);
+    this.modes = prepareRoutingModes(this.prepared, this.result, this.metrics, this.options);
     this.routingContext = buildRoutingContext(
       this.modes.routedContainerIds,
-      result,
-      metrics,
-      options
+      this.result,
+      this.metrics,
+      this.options
     );
     this.endpointOverlayScratch = new Map(
       [...this.routingContext.topologies].map(([containerId, topology]) => [
@@ -3230,14 +3251,14 @@ class GridEdgeRoutingSession {
         new EndpointOverlayScratch(topology),
       ])
     );
-    this.instrumentedRoutes = metrics ? [] : undefined;
+    this.instrumentedRoutes = this.metrics ? [] : undefined;
     for (const demandKey of this.prepared.demandCoords.keys()) {
       const [, , ownerId, side] = demandKey.split(':');
       const key = `${ownerId}:${side}`;
       this.ownerSideCounts.set(key, (this.ownerSideCounts.get(key) ?? 0) + 1);
     }
     this.routePlanState = {
-      result,
+      result: this.result,
       routingContext: this.routingContext,
       searchWorkspace: this.searchWorkspace,
       endpointOverlayScratch: this.endpointOverlayScratch,
@@ -3246,8 +3267,8 @@ class GridEdgeRoutingSession {
       selfLoopCounts: this.selfLoopCounts,
       pairRoutes: this.pairRoutes,
       instrumentedRoutes: this.instrumentedRoutes,
-      metrics,
-      options,
+      metrics: this.metrics,
+      options: this.options,
       eligibleIds: this.prepared.eligibleIds,
       endpointCandidatesByEdge: this.prepared.endpointCandidatesByEdge,
       compatibilityFastRoutes: this.modes.compatibilityFastRoutes,
@@ -3259,18 +3280,6 @@ class GridEdgeRoutingSession {
       alternativeItemAttachments: (plan, entry, containerId) =>
         this.alternativeItemAttachments(plan, entry, containerId),
     };
-  }
-
-  route(): void {
-    const plansByPair = new Map<string, EdgeRoutePlan[]>();
-    for (const plan of this.prepared.orderedPlans) {
-      const pairPlans = plansByPair.get(plan.pairKey) ?? [];
-      pairPlans.push(plan);
-      plansByPair.set(plan.pairKey, pairPlans);
-    }
-    for (const pairPlans of plansByPair.values()) {
-      this.routeBundle(pairPlans);
-    }
   }
 
   private pairedPortal(entry: EdgeEndpointEntry): PairedPortal {
