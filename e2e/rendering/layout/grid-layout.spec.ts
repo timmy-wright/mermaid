@@ -529,8 +529,8 @@ flowchart LR
         testInfo,
         `---
 config:
-  look: ${look}
   layout: grid
+  theme: forest
   grid:
     columns: 1
 ---
