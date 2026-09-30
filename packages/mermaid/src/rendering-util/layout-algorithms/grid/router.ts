@@ -3164,105 +3164,127 @@ function routeGridPlan(
   }
 }
 
-/*
- * TODO: Break `routeGridEdges()` into a private routing session with explicit phases and
- * transactional bundle retries.
- *
- * The function currently owns the complete routing invocation: plan collection and ordering,
- * endpoint allocation, compatibility fast-path selection, sparse-routing state, hierarchy portal
- * selection, routing each plan, committing routes, and retrying bundles. Those phases communicate
- * through several mutable maps and arrays captured by nested closures, including demand
- * coordinates, paired portals, pair routes, loop and side counts, instrumentation routes, search
- * workspace, and topology overlay scratch storage. Keeping that state in one function makes the
- * ordering dependencies hard to review and makes rollback correctness depend on every closure
- * knowing which structures it mutates.
- *
- * A production-quality refactor should introduce a private `GridEdgeRoutingSession` class, or an
- * equivalent module with an explicit `RoutingSession` state object, and separate these operations:
- *
- * 1. Collect and deterministically order plans, endpoint demands, and endpoint candidates.
- * 2. Prepare and validate corridor fast-path routes.
- * 3. Route one plan, including self-loops, LCA segments, hierarchy chains, and portal alternatives.
- * 4. Route a bundle as a transaction: initial order, deterministic retry order, then the documented
- *    hierarchy-separation relaxation.
- * 5. Commit or restore all route, portal, demand, pair, edge, and instrumentation state.
- *
- * Bundle rollback should move behind named `createBundleCheckpoint()` and
- * `restoreBundleCheckpoint()` operations. Do not implement this by blindly cloning and restoring
- * the complete instrumentation object. Metrics describing committed output, such as route totals
- * and selected portals, must be rolled back, while metrics describing work performed, such as
- * searches, expanded states, fallback attempts, and retry attempts, must survive a failed attempt.
- * Centralize that distinction in a typed checkpoint in `routerInstrumentation.ts` so adding a new
- * metric requires an explicit decision about whether it is transactional or cumulative.
- *
- * Perform the extraction incrementally and without changing route selection: first isolate the
- * checkpoint, then plan preparation, then single-plan routing, and finally move the remaining
- * session state. After each step, verify deterministic geometry and ordering, hierarchy and bundle
- * retries, resource fallbacks, and instrumentation totals.
- */
-export function routeGridEdges(
-  layout: LayoutData,
-  result: GridLayoutResult,
-  metrics?: GridRoutingInstrumentation,
-  options: GridRoutingOptions = {}
-): void {
-  rootContainerMeta(result);
-  const prepared = prepareEdgeRoutes(layout, result);
-  const { eligibleIds, orderedPlans, demandCoords, endpointCandidatesByEdge } = prepared;
+class GridEdgeRoutingSession {
+  private readonly prepared: PreparedEdgeRoutes;
+  private readonly modes: PreparedRoutingModes;
+  private readonly routingContext: GridRoutingContext;
+  private readonly searchWorkspace = new RouterSearchWorkspace();
+  private readonly endpointOverlayScratch: Map<GridContainerId, EndpointOverlayScratch>;
+  private readonly pairedPortals = new Map<string, PairedPortal>();
+  private readonly ownerSideCounts = new Map<string, number>();
+  private readonly instrumentedRoutes: Point[][] | undefined;
+  private readonly selfLoopCounts = new Map<string, number>();
+  private readonly pairRoutes = new Map<string, Point[][]>();
+  private readonly routePlanState: RouteGridPlanContext;
 
-  /*
-   * Grid routing currently uses two algorithms:
-   *
-   * - `routeWithinContainer()` is the deterministic corridor router. During normal rendering, an
-   *   ordinary unbundled same-container edge uses it as a fast path when its endpoint ports are
-   *   legal, the complete route passes measured-geometry validation, and its length equals the
-   *   Manhattan lower bound. This avoids building a visibility topology and running A* for routes
-   *   that sparse search cannot improve.
-   * - The sparse visibility router handles self-loops, bundles, ordinary routes that fail the fast
-   *   path, and hierarchy routes that need alternative portals or obstacle-aware search.
-   *
-   * Test-only topology/search caps and dual-route comparison disable the fast path intentionally:
-   * those modes must exercise sparse topology, search, and fallback behavior. Normal router and
-   * performance tests cover the production fast path separately.
-   *
-   * Hierarchy routing is still partially migrated. Bundles, routes whose two endpoints have no
-   * unrelated incident edges, and plans whose corridor route fails validation use sparse routing
-   * for every hierarchy-chain segment. Other single hierarchy edges may retain validated corridor
-   * segments when at least one endpoint is shared with another edge. Group-to-descendant routes
-   * always use sparse routing for their LCA segment, even when their ascent or descent chain still
-   * uses corridor routing. Defined sparse resource-limit failures also use the corridor route as a
-   * fallback, but only after that route passes the same geometry and pair-separation validation.
-   *
-   * Finishing the migration requires sparse routing to handle the remaining mixed-demand
-   * hierarchy segments without introducing shared subpaths or crossings, and to meet the large
-   * graph performance target without the common-edge fast path. It also requires generated nested
-   * hierarchy, label, loop, bundle, and fallback coverage plus release-level validation. Only then
-   * can `routeWithinContainer()`, corridor metadata, compatibility/fallback instrumentation, and
-   * their obsolete tests be removed.
-   */
-  const { compatibilityFastRoutes, sparseHierarchyIds, sparseLcaIds, routedContainerIds } =
-    prepareRoutingModes(prepared, result, metrics, options);
-  const context = buildRoutingContext(routedContainerIds, result, metrics, options);
-  const searchWorkspace = new RouterSearchWorkspace();
-  const endpointOverlayScratch = new Map(
-    [...context.topologies].map(([containerId, topology]) => [
-      containerId,
-      new EndpointOverlayScratch(topology),
-    ])
-  );
-  const pairedPortals = new Map<string, PairedPortal>();
-  const pairedPortal = (entry: EdgeEndpointEntry): PairedPortal => {
-    const existing = pairedPortals.get(entry.demandKey);
+  constructor(
+    layout: LayoutData,
+    private readonly result: GridLayoutResult,
+    private readonly metrics: GridRoutingInstrumentation | undefined,
+    private readonly options: GridRoutingOptions
+  ) {
+    rootContainerMeta(result);
+    this.prepared = prepareEdgeRoutes(layout, result);
+
+    /*
+     * Grid routing currently uses two algorithms:
+     *
+     * - `routeWithinContainer()` is the deterministic corridor router. During normal rendering, an
+     *   ordinary unbundled same-container edge uses it as a fast path when its endpoint ports are
+     *   legal, the complete route passes measured-geometry validation, and its length equals the
+     *   Manhattan lower bound. This avoids building a visibility topology and running A* for
+     *   routes that sparse search cannot improve.
+     * - The sparse visibility router handles self-loops, bundles, ordinary routes that fail the
+     *   fast path, and hierarchy routes that need alternative portals or obstacle-aware search.
+     *
+     * Test-only topology/search caps and dual-route comparison disable the fast path intentionally:
+     * those modes must exercise sparse topology, search, and fallback behavior. Normal router and
+     * performance tests cover the production fast path separately.
+     *
+     * Hierarchy routing is still partially migrated. Bundles, routes whose two endpoints have no
+     * unrelated incident edges, and plans whose corridor route fails validation use sparse routing
+     * for every hierarchy-chain segment. Other single hierarchy edges may retain validated
+     * corridor segments when at least one endpoint is shared with another edge.
+     * Group-to-descendant routes always use sparse routing for their LCA segment, even when their
+     * ascent or descent chain still uses corridor routing. Defined sparse resource-limit failures
+     * also use the corridor route as a fallback, but only after that route passes the same geometry
+     * and pair-separation validation.
+     *
+     * Finishing the migration requires sparse routing to handle the remaining mixed-demand
+     * hierarchy segments without introducing shared subpaths or crossings, and to meet the large
+     * graph performance target without the common-edge fast path. It also requires generated
+     * nested hierarchy, label, loop, bundle, and fallback coverage plus release-level validation.
+     * Only then can `routeWithinContainer()`, corridor metadata, compatibility/fallback
+     * instrumentation, and their obsolete tests be removed.
+     */
+    this.modes = prepareRoutingModes(this.prepared, result, metrics, options);
+    this.routingContext = buildRoutingContext(
+      this.modes.routedContainerIds,
+      result,
+      metrics,
+      options
+    );
+    this.endpointOverlayScratch = new Map(
+      [...this.routingContext.topologies].map(([containerId, topology]) => [
+        containerId,
+        new EndpointOverlayScratch(topology),
+      ])
+    );
+    this.instrumentedRoutes = metrics ? [] : undefined;
+    for (const demandKey of this.prepared.demandCoords.keys()) {
+      const [, , ownerId, side] = demandKey.split(':');
+      const key = `${ownerId}:${side}`;
+      this.ownerSideCounts.set(key, (this.ownerSideCounts.get(key) ?? 0) + 1);
+    }
+    this.routePlanState = {
+      result,
+      routingContext: this.routingContext,
+      searchWorkspace: this.searchWorkspace,
+      endpointOverlayScratch: this.endpointOverlayScratch,
+      demandCoords: this.prepared.demandCoords,
+      ownerSideCounts: this.ownerSideCounts,
+      selfLoopCounts: this.selfLoopCounts,
+      pairRoutes: this.pairRoutes,
+      instrumentedRoutes: this.instrumentedRoutes,
+      metrics,
+      options,
+      eligibleIds: this.prepared.eligibleIds,
+      endpointCandidatesByEdge: this.prepared.endpointCandidatesByEdge,
+      compatibilityFastRoutes: this.modes.compatibilityFastRoutes,
+      sparseHierarchyIds: this.modes.sparseHierarchyIds,
+      sparseLcaIds: this.modes.sparseLcaIds,
+      pairedPortal: (entry) => this.pairedPortal(entry),
+      alternativePairedPortals: (entry, interior) => this.alternativePairedPortals(entry, interior),
+      itemSegmentAttachment: (entry, containerId) => this.itemSegmentAttachment(entry, containerId),
+      alternativeItemAttachments: (plan, entry, containerId) =>
+        this.alternativeItemAttachments(plan, entry, containerId),
+    };
+  }
+
+  route(): void {
+    const plansByPair = new Map<string, EdgeRoutePlan[]>();
+    for (const plan of this.prepared.orderedPlans) {
+      const pairPlans = plansByPair.get(plan.pairKey) ?? [];
+      pairPlans.push(plan);
+      plansByPair.set(plan.pairKey, pairPlans);
+    }
+    for (const pairPlans of plansByPair.values()) {
+      this.routeBundle(pairPlans);
+    }
+  }
+
+  private pairedPortal(entry: EdgeEndpointEntry): PairedPortal {
+    const existing = this.pairedPortals.get(entry.demandKey);
     if (existing) {
       return existing;
     }
-    const owner = result.forest.nodeById.get(entry.ownerId);
+    const owner = this.result.forest.nodeById.get(entry.ownerId);
     if (!owner?.isGroup) {
       throw gridError('GRID_ROUTE_NOT_FOUND', `Missing portal owner "${entry.ownerId}"`);
     }
     const rect = routerRect(owner);
     const coordinate =
-      demandCoords.get(entry.demandKey) ??
+      this.prepared.demandCoords.get(entry.demandKey) ??
       (entry.side === 'left' || entry.side === 'right'
         ? (rect.top + rect.bottom) / 2
         : (rect.left + rect.right) / 2);
@@ -3282,19 +3304,20 @@ export function routeGridEdges(
       entry.side,
       clamp(coordinate, range.low, range.high)
     );
-    pairedPortals.set(entry.demandKey, portal);
-    if (metrics) {
-      metrics.hierarchyPortalPairs++;
-      metrics.hierarchyPortalTransitionLength += portal.transition.length;
+    this.pairedPortals.set(entry.demandKey, portal);
+    if (this.metrics) {
+      this.metrics.hierarchyPortalPairs++;
+      this.metrics.hierarchyPortalTransitionLength += portal.transition.length;
     }
     return portal;
-  };
-  const alternativePairedPortals = (
+  }
+
+  private alternativePairedPortals(
     entry: EdgeEndpointEntry,
     interior = true
-  ): SegmentAttachmentAlternative[] => {
-    const selected = pairedPortal(entry);
-    const owner = result.forest.nodeById.get(entry.ownerId);
+  ): SegmentAttachmentAlternative[] {
+    const selected = this.pairedPortal(entry);
+    const owner = this.result.forest.nodeById.get(entry.ownerId);
     if (!owner?.isGroup) {
       return [];
     }
@@ -3305,7 +3328,7 @@ export function routeGridEdges(
     if (!range) {
       return [];
     }
-    const container = result.containers.get(owner.id);
+    const container = this.result.containers.get(owner.id);
     const corridors =
       entry.side === 'left' || entry.side === 'right'
         ? container?.horizontalCorridors
@@ -3328,33 +3351,37 @@ export function routeGridEdges(
       return {
         attachment: portalAttachment(portal, interior),
         select: () => {
-          pairedPortals.set(entry.demandKey, portal);
-          demandCoords.set(entry.demandKey, coordinate);
+          this.pairedPortals.set(entry.demandKey, portal);
+          this.prepared.demandCoords.set(entry.demandKey, coordinate);
         },
       };
     });
-  };
-  const itemSegmentAttachment = (
+  }
+
+  private itemSegmentAttachment(
     entry: EdgeEndpointEntry,
     containerId: GridContainerId
-  ): SegmentAttachment => ({
-    ownerId: entry.ownerId,
-    ...itemAttachment(
-      entry.ownerId,
-      entry.side,
-      entry.demandKey,
-      containerId,
-      result,
-      demandCoords
-    ),
-  });
-  const alternativeItemAttachments = (
+  ): SegmentAttachment {
+    return {
+      ownerId: entry.ownerId,
+      ...itemAttachment(
+        entry.ownerId,
+        entry.side,
+        entry.demandKey,
+        containerId,
+        this.result,
+        this.prepared.demandCoords
+      ),
+    };
+  }
+
+  private alternativeItemAttachments(
     plan: EdgeRoutePlan,
     entry: EdgeEndpointEntry,
     containerId: GridContainerId
-  ): SegmentAttachmentAlternative[] => {
-    const current = itemSegmentAttachment(entry, containerId);
-    const owner = result.forest.nodeById.get(entry.ownerId);
+  ): SegmentAttachmentAlternative[] {
+    const current = this.itemSegmentAttachment(entry, containerId);
+    const owner = this.result.forest.nodeById.get(entry.ownerId);
     if (!owner) {
       return [];
     }
@@ -3378,8 +3405,8 @@ export function routeGridEdges(
             side,
             entry.demandKey,
             containerId,
-            result,
-            demandCoords,
+            this.result,
+            this.prepared.demandCoords,
             coordinate
           ),
         };
@@ -3390,128 +3417,101 @@ export function routeGridEdges(
         attachment,
         select: () => undefined,
       }));
-  };
-  const ownerSideCounts = new Map<string, number>();
-  const instrumentedRoutes: Point[][] | undefined = metrics ? [] : undefined;
-  for (const demandKey of demandCoords.keys()) {
-    const [, , ownerId, side] = demandKey.split(':');
-    const key = `${ownerId}:${side}`;
-    ownerSideCounts.set(key, (ownerSideCounts.get(key) ?? 0) + 1);
-  }
-  const selfLoopCounts = new Map<string, number>();
-  const pairRoutes = new Map<string, Point[][]>();
-
-  const routePlanState: RouteGridPlanContext = {
-    result,
-    routingContext: context,
-    searchWorkspace,
-    endpointOverlayScratch,
-    demandCoords,
-    ownerSideCounts,
-    selfLoopCounts,
-    pairRoutes,
-    instrumentedRoutes,
-    metrics,
-    options,
-    eligibleIds,
-    endpointCandidatesByEdge,
-    compatibilityFastRoutes,
-    sparseHierarchyIds,
-    sparseLcaIds,
-    pairedPortal,
-    alternativePairedPortals,
-    itemSegmentAttachment,
-    alternativeItemAttachments,
-  };
-  const routePlan = (plan: EdgeRoutePlan, allowHierarchyRelaxation = true): void =>
-    routeGridPlan(plan, routePlanState, allowHierarchyRelaxation);
-
-  const plansByPair = new Map<string, EdgeRoutePlan[]>();
-  for (const plan of orderedPlans) {
-    const pairPlans = plansByPair.get(plan.pairKey) ?? [];
-    pairPlans.push(plan);
-    plansByPair.set(plan.pairKey, pairPlans);
   }
 
-  for (const pairPlans of plansByPair.values()) {
+  private routePlan(plan: EdgeRoutePlan, allowHierarchyRelaxation = true): void {
+    routeGridPlan(plan, this.routePlanState, allowHierarchyRelaxation);
+  }
+
+  private createBundleCheckpoint(pairPlans: readonly EdgeRoutePlan[]): BundleCheckpoint {
+    return createBundleCheckpoint(
+      pairPlans,
+      this.pairRoutes,
+      this.pairedPortals,
+      this.prepared.demandCoords,
+      this.instrumentedRoutes,
+      this.metrics
+    );
+  }
+
+  private restoreBundleCheckpoint(checkpoint: BundleCheckpoint): void {
+    restoreBundleCheckpoint(
+      checkpoint,
+      this.pairRoutes,
+      this.pairedPortals,
+      this.prepared.demandCoords,
+      this.instrumentedRoutes,
+      this.metrics
+    );
+  }
+
+  private routeBundle(pairPlans: EdgeRoutePlan[]): void {
     const canRetry =
       pairPlans.length > 1 &&
       pairPlans.length <= 8 &&
       pairPlans.every(({ edge }) => edge.start !== edge.end);
     if (!canRetry) {
       for (const plan of pairPlans) {
-        routePlan(plan);
+        this.routePlan(plan);
       }
-      continue;
+      return;
     }
 
     // A bundle is the retry unit because earlier siblings reserve pair corridors and portals for
     // later ones. Restore every shared structure before changing route order or the retry becomes
     // biased.
-    const checkpoint = createBundleCheckpoint(
-      pairPlans,
-      pairRoutes,
-      pairedPortals,
-      demandCoords,
-      instrumentedRoutes,
-      metrics
-    );
-
+    const checkpoint = this.createBundleCheckpoint(pairPlans);
     let initialError: unknown;
     try {
       for (const plan of pairPlans) {
-        routePlan(plan, false);
+        this.routePlan(plan, false);
       }
-      continue;
+      return;
     } catch (error) {
       initialError = error;
-      restoreBundleCheckpoint(
-        checkpoint,
-        pairRoutes,
-        pairedPortals,
-        demandCoords,
-        instrumentedRoutes,
-        metrics
-      );
-      if (metrics) {
-        metrics.bundleRetryAttempts++;
-      }
-      const retryPlans = [...pairPlans].sort((a, b) => {
-        const aBoundaryCount = a.source.chain.length + a.target.chain.length - 2;
-        const bBoundaryCount = b.source.chain.length + b.target.chain.length - 2;
-        return (
-          bBoundaryCount - aBoundaryCount ||
-          Math.abs(b.laneOffset) - Math.abs(a.laneOffset) ||
-          a.laneOffset - b.laneOffset ||
-          compareCodeUnits(a.edge.id, b.edge.id)
-        );
-      });
-      let retryError: unknown;
-      try {
-        for (const plan of retryPlans) {
-          routePlan(plan, false);
-        }
-        if (metrics) {
-          metrics.bundleRetrySuccesses++;
-        }
-        continue;
-      } catch (error) {
-        retryError = error;
-        restoreBundleCheckpoint(
-          checkpoint,
-          pairRoutes,
-          pairedPortals,
-          demandCoords,
-          instrumentedRoutes,
-          metrics
-        );
-      }
-      if (!isPairSeparationError(initialError) || !isPairSeparationError(retryError)) {
-        throw initialError;
-      }
-      for (const plan of pairPlans) {
-        routePlan(plan);
+      this.restoreBundleCheckpoint(checkpoint);
+      if (this.metrics) {
+        this.metrics.bundleRetryAttempts++;
       }
     }
+
+    const retryPlans = [...pairPlans].sort((a, b) => {
+      const aBoundaryCount = a.source.chain.length + a.target.chain.length - 2;
+      const bBoundaryCount = b.source.chain.length + b.target.chain.length - 2;
+      return (
+        bBoundaryCount - aBoundaryCount ||
+        Math.abs(b.laneOffset) - Math.abs(a.laneOffset) ||
+        a.laneOffset - b.laneOffset ||
+        compareCodeUnits(a.edge.id, b.edge.id)
+      );
+    });
+    let retryError: unknown;
+    try {
+      for (const plan of retryPlans) {
+        this.routePlan(plan, false);
+      }
+      if (this.metrics) {
+        this.metrics.bundleRetrySuccesses++;
+      }
+      return;
+    } catch (error) {
+      retryError = error;
+      this.restoreBundleCheckpoint(checkpoint);
+    }
+    if (!isPairSeparationError(initialError) || !isPairSeparationError(retryError)) {
+      throw initialError;
+    }
+    for (const plan of pairPlans) {
+      this.routePlan(plan);
+    }
   }
+}
+
+export function routeGridEdges(
+  layout: LayoutData,
+  result: GridLayoutResult,
+  metrics?: GridRoutingInstrumentation,
+  options: GridRoutingOptions = {}
+): void {
+  new GridEdgeRoutingSession(layout, result, metrics, options).route();
 }
