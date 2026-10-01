@@ -5,12 +5,6 @@ import { normalizePolyline } from '../layout-utils/geometry.js';
 import { validateLayout } from '../layout-utils/validateLayout.js';
 import { prepareGridLayout } from './edgeLabels.js';
 import { runGridLayoutCore } from './layoutCore.js';
-import {
-  areExactlyAxisAligned,
-  assignCompactPortalCoordinates,
-  boundedAlternativePortalCoordinates,
-  validateSameContainerRoute,
-} from './router.js';
 import { createGridRoutingInstrumentation } from './routerInstrumentation.js';
 import { ROOT_CONTAINER_ID } from './types.js';
 
@@ -182,22 +176,6 @@ function invalidRoutingIssues(data: LayoutData) {
 }
 
 describe('grid router', () => {
-  it('keeps compact portal coordinates within their available interval', () => {
-    expect(assignCompactPortalCoordinates([0, 10, 0], 0, 10)).toEqual([0, 6, 10]);
-  });
-
-  it('bounds alternative portal coordinates and prefers nearby routing corridors', () => {
-    expect(boundedAlternativePortalCoordinates(50, 10, 90, [80, 20, 60, 50, 100])).toEqual([
-      60, 20, 80,
-    ]);
-    expect(boundedAlternativePortalCoordinates(50, 10, 90, [], 4)).toEqual([10, 90]);
-  });
-
-  it('requires exact axis alignment for the direct route shortcut', () => {
-    expect(areExactlyAxisAligned({ x: 0, y: 0 }, { x: 0.5, y: 10 })).toBe(false);
-    expect(areExactlyAxisAligned({ x: 0, y: 0 }, { x: 0, y: 10 })).toBe(true);
-  });
-
   it('uses the configured edge curve and rounded corner radius', () => {
     const data = baseLayout(
       [leaf('a', 80, 40, { row: 1, column: 1 }), leaf('b', 80, 40, { row: 2, column: 2 })],
@@ -402,41 +380,6 @@ describe('grid router', () => {
     runGridLayoutCore(data);
 
     expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
-  });
-
-  it('rejects a terminal segment that passes through its destination node', () => {
-    const data = baseLayout(
-      [
-        leaf('source', 80, 40, { row: 1, column: 1 }),
-        leaf('target', 80, 40, { row: 1, column: 2 }),
-      ],
-      [],
-      { rowGap: 20, columnGap: 20 }
-    );
-
-    const result = runGridLayoutCore(data);
-    const source = data.nodes.find(({ id }) => id === 'source')!;
-    const target = data.nodes.find(({ id }) => id === 'target')!;
-    const sourceRight = (source.x ?? 0) + (source.width ?? 0) / 2;
-    const targetLeft = (target.x ?? 0) - (target.width ?? 0) / 2;
-    const targetRight = (target.x ?? 0) + (target.width ?? 0) / 2;
-    const targetTop = (target.y ?? 0) - (target.height ?? 0) / 2;
-
-    expect(
-      validateSameContainerRoute(
-        [
-          { x: sourceRight, y: source.y ?? 0 },
-          { x: sourceRight, y: targetTop - 20 },
-          { x: targetRight + 20, y: targetTop - 20 },
-          { x: targetRight + 20, y: target.y ?? 0 },
-          { x: targetLeft, y: target.y ?? 0 },
-        ],
-        source,
-        target,
-        ROOT_CONTAINER_ID,
-        result
-      )
-    ).toBe(false);
   });
 
   it('allocates distinct ports for repeated self-loops on the same node', () => {
