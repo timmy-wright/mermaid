@@ -1,5 +1,6 @@
 import type { LayoutData, Node } from '../../types.js';
 import { compareCodeUnits } from '../layout-utils/helpers.js';
+import { positionGridEdgeLabels } from './edgeLabels.js';
 import { buildGridForest } from './groups.js';
 import {
   buildGridSourceOrder,
@@ -430,6 +431,10 @@ function commitGridGeometry(source: LayoutData, target: LayoutData): void {
       continue;
     }
     targetEdge.points = sourceEdge.points?.map((point) => ({ ...point }));
+    targetEdge.curve = sourceEdge.curve;
+    targetEdge.cornerRadius = sourceEdge.cornerRadius;
+    targetEdge.portClipping = 'outline-orthogonal';
+    targetEdge.skipCornerFix = sourceEdge.curve === 'linear';
   }
 }
 
@@ -516,6 +521,9 @@ function runGridLayoutCoreInPlace(
   // Routing consumes absolute node bounds and corridor coordinates, so it must run after the
   // children-first sizing and top-down translation phases have both completed.
   routeGridEdges(data, result, metrics, routingOptions);
+  // Labels consume final routes and may transactionally reroute them, so they are the last layout
+  // phase before the working copy is committed to the render model.
+  positionGridEdgeLabels(data, undefined, metrics);
   return result;
 }
 
@@ -532,8 +540,8 @@ export function runGridLayoutCore(
 ): GridLayoutResult {
   const data = data4Layout as GridLayoutData;
 
-  // Geometry and routing are transactional: failed recovery must not leave partial coordinates
-  // on the shared render model.
+  // Routing and label placement are transactional: a failed recovery must not leave partial
+  // coordinates on the shared render model. Commit only the geometry from a complete run.
   const working = cloneGridLayoutData(data);
   const result = runGridLayoutCoreInPlace(working, metrics, routingOptions);
   commitGridGeometry(working, data);

@@ -1,5 +1,6 @@
 import type { LayoutData, Node } from '../../types.js';
 import type { Point } from '../../../types.js';
+import { DEFAULT_EDGE_CORNER_RADIUS } from '../../edgeCornerRadius.js';
 import type { GridRoutingInstrumentation } from './routerInstrumentation.js';
 
 // The root participates in the same container algorithms as groups but has no backing Node.
@@ -155,6 +156,10 @@ export interface GridLayoutConfigNormalized {
   titleGap: number;
   horizontalAlign: GridHorizontalAlign;
   verticalAlign: GridVerticalAlign;
+  // Routing publishes these values on each edge so shared rendering and line hops use identical
+  // corner geometry without depending on grid internals.
+  curve: GridCurve;
+  edgeCornerRadius: number;
 }
 
 export interface GridResolvedPlacement {
@@ -278,6 +283,8 @@ export const GRID_DEFAULTS = {
   titleGap: 8,
   horizontalAlign: 'center' as GridHorizontalAlign,
   verticalAlign: 'center' as GridVerticalAlign,
+  curve: 'rounded' as GridCurve,
+  edgeCornerRadius: DEFAULT_EDGE_CORNER_RADIUS,
 };
 
 export type GridLayoutData = LayoutData & {
@@ -292,6 +299,8 @@ export type GridLayoutData = LayoutData & {
       titleGap?: number;
       horizontalAlign?: GridHorizontalAlign;
       verticalAlign?: GridVerticalAlign;
+      curve?: GridCurve;
+      edgeCornerRadius?: number;
     };
   };
 };
