@@ -182,6 +182,244 @@ function expectFiniteOrthogonalRoutes(data: LayoutData): void {
 }
 
 describe('grid router', () => {
+  it('keeps an aligned edge straight and routes a diagonal edge into a separate endpoint side', () => {
+    const createLayout = (edges: Edge[]) =>
+      baseLayout(
+        [
+          leaf('A', 80, 40, { row: 1, column: 1 }),
+          leaf('C', 80, 40, { row: 2, column: 1 }),
+          leaf('D', 80, 40, { row: 1, column: 3 }),
+        ],
+        edges,
+        { columns: 3, rowGap: 45, columnGap: 55 }
+      );
+    const data = createLayout([edge('A-D', 'A', 'D'), edge('C-D', 'C', 'D')]);
+    runGridLayoutCore(data);
+
+    const aligned = data.edges.find(({ id }) => id === 'A-D')!;
+    const diagonal = data.edges.find(({ id }) => id === 'C-D')!;
+    const alignedPoints = normalizePolyline(aligned.points ?? []).points;
+    const diagonalPoints = normalizePolyline(diagonal.points ?? []).points;
+    const destination = data.nodes.find(({ id }) => id === 'D')!;
+    const destinationBounds = nodeRect(destination);
+
+    expect(alignedPoints.every(({ y }) => y === alignedPoints[0].y)).toBe(true);
+    expect(diagonalPoints.at(-1)!.y).toBe(destinationBounds.bottom);
+    expect(diagonalPoints.at(-2)!.y).toBeGreaterThan(destinationBounds.bottom);
+
+    const reversed = createLayout([edge('C-D', 'C', 'D'), edge('A-D', 'A', 'D')]);
+    runGridLayoutCore(reversed);
+    expect(Object.fromEntries(reversed.edges.map(({ id, points }) => [id, points]))).toEqual(
+      Object.fromEntries(data.edges.map(({ id, points }) => [id, points]))
+    );
+  });
+
+  it.each([2, 3])(
+    'shares the destination side of a straight outgoing edge instead of detouring (E in row %i)',
+    (eRow) => {
+      const data = baseLayout(
+        [
+          leaf('A', 80, 40, { row: 1, column: 1 }),
+          leaf('B', 80, 40, { row: 1, column: 2 }),
+          leaf('C', 80, 40, { row: 2, column: 1 }),
+          leaf('D', 80, 40, { row: 1, column: 3 }),
+          leaf('E', 80, 40, { row: eRow, column: 3 }),
+        ],
+        [
+          edge('A-B', 'A', 'B'),
+          edge('A-C', 'A', 'C'),
+          edge('B-D', 'B', 'D'),
+          edge('C-D', 'C', 'D'),
+          edge('D-E', 'D', 'E'),
+        ],
+        { columns: 3, rowGap: 45, columnGap: 55 }
+      );
+      runGridLayoutCore(data);
+
+      const points = (id: string) =>
+        normalizePolyline(data.edges.find((candidate) => candidate.id === id)!.points ?? []).points;
+      const destination = nodeRect(data.nodes.find(({ id }) => id === 'D')!);
+      const incoming = points('C-D');
+      const outgoing = points('D-E');
+
+      expect(Math.min(...incoming.map(({ y }) => y))).toBeGreaterThanOrEqual(destination.top);
+      expect(incoming.at(-1)!.y).toBe(destination.bottom);
+      expect(outgoing[0].y).toBe(destination.bottom);
+      expect(outgoing.every(({ x }) => x === outgoing[0].x)).toBe(true);
+      expect(Math.abs(incoming.at(-1)!.x - outgoing[0].x)).toBeGreaterThanOrEqual(24);
+    }
+  );
+
+  it('keeps a straight edge in a gap shorter than two terminal approaches', () => {
+    const data = baseLayout(
+      [
+        leaf('A', 80, 40, { row: 1, column: 1, horizontalAlign: 'left', verticalAlign: 'center' }),
+        leaf('B', 80, 40, {
+          row: 1,
+          column: 1,
+          horizontalAlign: 'center',
+          verticalAlign: 'center',
+        }),
+        leaf('D', 80, 40, { row: 1, column: 2 }),
+      ],
+      [edge('A-B', 'A', 'B'), edge('A-D', 'A', 'D')],
+      { cellGap: 18, rowGap: 55, columnGap: 80 }
+    );
+    runGridLayoutCore(data);
+
+    const straight = normalizePolyline(
+      data.edges.find(({ id }) => id === 'A-B')!.points ?? []
+    ).points;
+    expect(straight).toHaveLength(2);
+    expect(straight[0].x).toBe(straight[1].x);
+  });
+
+  it('keeps edges that enter the same group off a shared corridor', () => {
+    const data = baseLayout(
+      [
+        leaf('C', 80, 40, { row: 1, column: 1 }),
+        group('Nested', 'Nested', { row: 2, column: 1 }),
+        leaf('D', 80, 40, { row: 1, column: 1 }, 'Nested'),
+        leaf('E', 80, 40, { row: 2, column: 1 }, 'Nested'),
+      ],
+      [edge('C-D', 'C', 'D'), edge('C-E', 'C', 'E')],
+      { rowGap: 45, columnGap: 70 }
+    );
+    runGridLayoutCore(data);
+
+    expect(invalidRoutingIssues(data)).toEqual([]);
+    const [first, second] = data.edges;
+    expect(longestSharedNonterminalSubpath(first, second)).toBe(0);
+    const nested = data.nodes.find(({ id }) => id === 'Nested')!;
+    const nestedLeft = (nested.x ?? 0) - (nested.width ?? 0) / 2;
+    const nestedRight = (nested.x ?? 0) + (nested.width ?? 0) / 2;
+    expect(Math.max(...(first.points?.map(({ x }) => x) ?? []))).toBeGreaterThan(nestedRight);
+    expect(Math.min(...(second.points?.map(({ x }) => x) ?? []))).toBeLessThan(nestedLeft);
+    expect(first.points?.[0].x).toBeGreaterThan(second.points?.[0].x ?? Number.POSITIVE_INFINITY);
+  });
+
+  it('does not let a later hierarchy route displace an earlier sparse route', () => {
+    const data = baseLayout(
+      [
+        leaf('C', 80, 40, { row: 1, column: 1 }),
+        group('Work', 'Work', { row: 1, column: 2 }),
+        group('Nested', 'Nested', { row: 2, column: 1 }, 'Work'),
+        leaf('D', 80, 40, { row: 1, column: 1 }, 'Nested'),
+        leaf('E', 80, 40, { row: 2, column: 1 }, 'Nested'),
+      ],
+      [edge('C-D', 'C', 'D'), edge('C-E', 'C', 'E')],
+      { rowGap: 45, columnGap: 70 }
+    );
+    runGridLayoutCore(data);
+
+    expect(invalidRoutingIssues(data)).toEqual([]);
+    const [toD, toE] = data.edges;
+    expect(longestSharedNonterminalSubpath(toD, toE)).toBe(0);
+    const endpointYs = [
+      data.nodes.find(({ id }) => id === 'C')?.y ?? 0,
+      data.nodes.find(({ id }) => id === 'D')?.y ?? 0,
+    ];
+    const routeYs = toD.points?.map(({ y }) => y) ?? [];
+    expect(Math.min(...routeYs)).toBeGreaterThanOrEqual(Math.min(...endpointYs) - 1);
+    expect(Math.max(...routeYs)).toBeLessThanOrEqual(Math.max(...endpointYs) + 1);
+  });
+
+  it.each(['LR', 'TB', 'BT'])(
+    'reserves a strongly preferred group side before placing an ambiguous hierarchy route in %s',
+    (direction) => {
+      const data = baseLayout(
+        [
+          group('Work', 'Work', { row: 1, column: 2 }),
+          leaf('C', 80, 40, { row: 1, column: 1 }, 'Work'),
+          group('Nested', 'Nested', { row: 2, column: 1 }, 'Work'),
+          leaf('D', 80, 40, { row: 1, column: 1 }, 'Nested'),
+          leaf('E', 80, 40, { row: 2, column: 1 }, 'Nested'),
+          group('Output', 'Output', { row: 1, column: 3 }),
+          leaf('F', 80, 40, { row: 1, column: 1 }, 'Output'),
+        ],
+        [edge('C-E', 'C', 'E'), edge('D-F', 'D', 'F')],
+        { rowGap: 45, columnGap: 70 }
+      );
+      data.direction = direction;
+      runGridLayoutCore(data);
+
+      expect(invalidRoutingIssues(data)).toEqual([]);
+      const nested = data.nodes.find(({ id }) => id === 'Nested')!;
+      const toE = data.edges.find(({ id }) => id === 'C-E')!;
+      const toF = data.edges.find(({ id }) => id === 'D-F')!;
+      expect(Math.min(...(toE.points?.map(({ x }) => x) ?? []))).toBeLessThan(
+        (nested.x ?? 0) - (nested.width ?? 0) / 2
+      );
+      const endpointYs = [
+        data.nodes.find(({ id }) => id === 'D')?.y ?? 0,
+        data.nodes.find(({ id }) => id === 'F')?.y ?? 0,
+      ];
+      const routeYs = toF.points?.map(({ y }) => y) ?? [];
+      expect(Math.min(...routeYs)).toBeGreaterThanOrEqual(Math.min(...endpointYs) - 1);
+      expect(Math.max(...routeYs)).toBeLessThanOrEqual(Math.max(...endpointYs) + 1);
+    }
+  );
+
+  it('reserves a horizontal side before assigning a diagonal hierarchy route vertically', () => {
+    const data = baseLayout(
+      [
+        group('Work', 'Work', { row: 1, column: 1 }),
+        leaf('A', 80, 40, { row: 1, column: 1 }, 'Work'),
+        leaf('B', 80, 40, { row: 1, column: 2 }, 'Work'),
+        group('Nested', 'Nested', { row: 2, column: 2 }, 'Work'),
+        leaf('C', 80, 40, { row: 1, column: 1 }, 'Nested'),
+      ],
+      [edge('A-C', 'A', 'C'), edge('A-B', 'A', 'B')],
+      { rowGap: 82, columnGap: 70 }
+    );
+    runGridLayoutCore(data);
+
+    expect(invalidRoutingIssues(data)).toEqual([]);
+    const diagonal = data.edges.find(({ id }) => id === 'A-C')!;
+    const horizontal = data.edges.find(({ id }) => id === 'A-B')!;
+    expect(diagonal.points?.[0].x).toBe(diagonal.points?.[1].x);
+    expect(horizontal.points?.[0].y).toBe(horizontal.points?.[1].y);
+  });
+
+  it('lines group portals up with the item ports so edges take a single jog', () => {
+    const data = baseLayout(
+      [
+        group('Work', 'Work', { row: 1, column: 2 }),
+        group('Nested', 'Nested', { row: 2, column: 1 }, 'Work'),
+        leaf('D', 80, 40, { row: 1, column: 1 }, 'Nested'),
+        leaf('E', 80, 40, { row: 2, column: 1 }, 'Nested'),
+        group('Output', 'Output', { row: 1, column: 3 }),
+        leaf('F', 80, 40, { row: 1, column: 1 }, 'Output'),
+      ],
+      [edge('D-F', 'D', 'F'), edge('E-F', 'E', 'F')],
+      { rowGap: 45, columnGap: 70 }
+    );
+    runGridLayoutCore(data);
+
+    expect(invalidRoutingIssues(data)).toEqual([]);
+    for (const item of data.edges) {
+      expect(normalizePolyline(item.points ?? []).bends).toBe(2);
+    }
+  });
+
+  it('routes around a blocker on the aligned straight corridor', () => {
+    const data = baseLayout(
+      [
+        leaf('A', 80, 40, { row: 1, column: 1 }),
+        leaf('C', 80, 40, { row: 2, column: 1 }),
+        leaf('B', 80, 40, { row: 1, column: 2 }),
+        leaf('D', 80, 40, { row: 1, column: 3 }),
+      ],
+      [edge('A-D', 'A', 'D'), edge('C-D', 'C', 'D')],
+      { columns: 3, rowGap: 45, columnGap: 55 }
+    );
+    runGridLayoutCore(data);
+
+    const aligned = data.edges.find(({ id }) => id === 'A-D')!;
+    expect(normalizePolyline(aligned.points ?? []).bends).toBeGreaterThan(0);
+    expect(validateLayout(data)).toMatchObject({ ok: true, issues: [] });
+  });
+
   it.each([
     [80, 40],
     [100, 40],
@@ -582,14 +820,36 @@ describe('grid router', () => {
     runGridLayoutCore(data);
 
     const source = data.nodes.find(({ id }) => id === 'source')!;
-    const sourceTop = (source.y ?? 0) - (source.height ?? 0) / 2;
-    const sourceBottom = (source.y ?? 0) + (source.height ?? 0) / 2;
-    const ports = data.edges.map((item) => item.points![0]);
-    const ys = ports.map(({ y }) => y).sort((a, b) => a - b);
-    expect(ys[0]).toBeGreaterThanOrEqual(sourceTop + 6);
-    expect(ys.at(-1)).toBeLessThanOrEqual(sourceBottom - 6);
-    expect(ys[1] - ys[0]).toBeGreaterThanOrEqual(4);
-    expect(ys[2] - ys[1]).toBeGreaterThanOrEqual(4);
+    const bounds = nodeRect(source);
+    const portsBySide = new Map<string, number[]>();
+    for (const routed of data.edges) {
+      const port = routed.points![0];
+      const side =
+        port.x === bounds.left
+          ? 'left'
+          : port.x === bounds.right
+            ? 'right'
+            : port.y === bounds.top
+              ? 'top'
+              : port.y === bounds.bottom
+                ? 'bottom'
+                : undefined;
+      expect(side).toBeDefined();
+      const coordinate = side === 'left' || side === 'right' ? port.y : port.x;
+      const values = portsBySide.get(side!) ?? [];
+      values.push(coordinate);
+      portsBySide.set(side!, values);
+    }
+    for (const [side, coordinates] of portsBySide) {
+      const low = side === 'left' || side === 'right' ? bounds.top + 6 : bounds.left + 6;
+      const high = side === 'left' || side === 'right' ? bounds.bottom - 6 : bounds.right - 6;
+      const sorted = coordinates.sort((a, b) => a - b);
+      expect(sorted[0]).toBeGreaterThanOrEqual(low);
+      expect(sorted.at(-1)).toBeLessThanOrEqual(high);
+      for (let index = 1; index < sorted.length; index++) {
+        expect(sorted[index] - sorted[index - 1]).toBeGreaterThanOrEqual(4);
+      }
+    }
     for (const routed of data.edges) {
       expect(terminalLength(routed.points ?? [], true)).toBeGreaterThanOrEqual(12);
       expect(terminalLength(routed.points ?? [], false)).toBeGreaterThanOrEqual(12);
